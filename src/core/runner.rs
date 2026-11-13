@@ -75,7 +75,10 @@ pub fn run(
 }
 
 /// Checks everything that must hold before any case runs.
-fn preflight(cases: &[LoadedCase], registry: &Registry) -> Vec<CaseError> {
+///
+/// `ta lint` calls the same function, so a case that lint accepts is a case
+/// the runner would not reject. Validation does not execute a step.
+pub fn preflight(cases: &[LoadedCase], registry: &Registry) -> Vec<CaseError> {
     let names = registry.names();
     let hint = if names.is_empty() {
         "no steps are registered; build with a driver feature enabled".to_string()

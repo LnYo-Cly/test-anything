@@ -6,6 +6,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::core::assert::AssertionReport;
+use crate::core::case::CaseError;
 use crate::core::report::{CaseReport, CaseStatus, Problem, RunOutcome, StepReport, Summary};
 
 /// How results are rendered.
@@ -24,6 +25,90 @@ pub struct Rendered {
     pub stdout: String,
     /// Diagnostics.
     pub stderr: String,
+}
+
+/// What `ta lint` checked and what it found.
+#[derive(Debug, Clone, Default)]
+pub struct LintReport {
+    /// Number of case files the paths expanded to.
+    pub files: usize,
+    /// Every problem found, across all files.
+    pub errors: Vec<CaseError>,
+}
+
+impl LintReport {
+    /// Whether every checked case would pass the runner's preflight.
+    pub fn is_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
+/// Renders a lint result.
+pub fn render_lint(report: &LintReport, format: Format) -> Rendered {
+    match format {
+        Format::Json => Rendered {
+            stdout: format!("{}\n", json_lint(report)),
+            stderr: String::new(),
+        },
+        Format::Text => text_lint(report),
+    }
+}
+
+fn text_lint(report: &LintReport) -> Rendered {
+    let mut stdout = String::new();
+    for error in &report.errors {
+        // The parser's message carries a source snippet with its own line
+        // breaks. Text mode promises one line per error, so collapse the
+        // layout while keeping every word; JSON keeps the exact message.
+        let message = error
+            .message
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        stdout.push_str(&format!("{}: {message}\n", error.file.display()));
+    }
+    stdout.push_str(&format!(
+        "Checked {} {}: {} {}.\n",
+        report.files,
+        noun(report.files, "file", "files"),
+        report.errors.len(),
+        noun(report.errors.len(), "error", "errors"),
+    ));
+    Rendered {
+        stdout,
+        stderr: String::new(),
+    }
+}
+
+fn json_lint(report: &LintReport) -> Value {
+    json!({
+        "ok": report.is_ok(),
+        "files": report.files,
+        "errors": report
+            .errors
+            .iter()
+            .map(|error| {
+                json!({
+                    "file": error.file.display().to_string(),
+                    "message": error.message,
+                })
+            })
+            .collect::<Vec<Value>>(),
+    })
+}
+
+/// Renders a JSON Schema value for standard output.
+pub fn render_schema(schema: &Value, format: Format) -> Rendered {
+    let text = match format {
+        Format::Json => schema.to_string(),
+        // A person reads this mode, so make the nesting visible. Serializing a
+        // `Value` cannot fail in practice; the compact form is a safe fallback.
+        Format::Text => serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string()),
+    };
+    Rendered {
+        stdout: format!("{text}\n"),
+        stderr: String::new(),
+    }
 }
 
 /// Renders an outcome in the requested format.
@@ -416,5 +501,89 @@ mod tests {
         assert_eq!(value["ok"], false);
         assert_eq!(value["cases"], json!([]));
         assert_eq!(value["errors"][0]["file"], "broken.yaml");
+    }
+
+    #[test]
+    fn lint_text_puts_one_error_per_line_and_ends_with_a_summary() {
+        let report = LintReport {
+            files: 2,
+            errors: vec![
+                CaseError {
+                    file: PathBuf::from("a.yaml"),
+                    message: "line 2: unknown field".to_string(),
+                },
+                CaseError {
+                    file: PathBuf::from("b.yaml"),
+                    message: "step 1: undefined variable".to_string(),
+                },
+            ],
+        };
+
+        let rendered = render_lint(&report, Format::Text);
+
+        assert!(rendered.stderr.is_empty());
+        assert_eq!(
+            rendered.stdout,
+            "a.yaml: line 2: unknown field\nb.yaml: step 1: undefined variable\nChecked 2 files: 2 errors.\n"
+        );
+    }
+
+    #[test]
+    fn lint_text_keeps_a_multiline_parser_message_on_one_line() {
+        let report = LintReport {
+            files: 1,
+            errors: vec![CaseError {
+                file: PathBuf::from("broken.yaml"),
+                message: "line 2 column 3: unclosed bracket\n --> <input>\n  |".to_string(),
+            }],
+        };
+
+        let rendered = render_lint(&report, Format::Text);
+
+        assert_eq!(
+            rendered.stdout,
+            "broken.yaml: line 2 column 3: unclosed bracket --> <input> |\nChecked 1 file: 1 error.\n"
+        );
+    }
+
+    #[test]
+    fn lint_json_has_ok_files_and_errors() {
+        let report = LintReport {
+            files: 1,
+            errors: vec![CaseError {
+                file: PathBuf::from("broken.yaml"),
+                message: "line 2: unknown field".to_string(),
+            }],
+        };
+
+        let rendered = render_lint(&report, Format::Json);
+        let value: Value = serde_json::from_str(&rendered.stdout).expect("stdout must be JSON");
+
+        assert_eq!(
+            value,
+            json!({
+                "ok": false,
+                "files": 1,
+                "errors": [{"file": "broken.yaml", "message": "line 2: unknown field"}],
+            })
+        );
+    }
+
+    #[test]
+    fn schema_text_is_pretty_and_json_is_compact() {
+        let schema = json!({"type": "object", "properties": {"name": {"type": "string"}}});
+
+        let text = render_schema(&schema, Format::Text);
+        assert!(text.stderr.is_empty());
+        assert!(
+            text.stdout.contains("\n  \"type\""),
+            "text mode must indent, got: {:?}",
+            text.stdout
+        );
+        let parsed: Value = serde_json::from_str(&text.stdout).expect("stdout must be JSON");
+        assert_eq!(parsed, schema);
+
+        let compact = render_schema(&schema, Format::Json);
+        assert_eq!(compact.stdout, format!("{schema}\n"));
     }
 }

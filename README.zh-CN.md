@@ -14,7 +14,7 @@
 
 [English](README.md) · **简体中文**
 
-[安装](#安装) · [快速开始](#快速开始) · [使用指南](docs/guide.md) · [路线图](#路线图) · [参与贡献](CONTRIBUTING.zh-CN.md)
+[安装](#安装) · [快速开始](#快速开始) · [使用指南](docs/guide.md) · [参与贡献](CONTRIBUTING.zh-CN.md)
 
 </div>
 
@@ -124,23 +124,10 @@ $ echo $?
 | 细节 | `ta --output json run …`：一个 JSON 对象，包含每个步骤的结果和每条断言 |
 | 运行后的证据 | 每个失败用例一个失败包：`case.yaml`、`report.json`、`meta.json`（最后写入） |
 | 外部输入 | 用 `--var name=value` 传入地址、令牌和路径 |
+| 不执行就检查用例 | `ta lint cases/`：与 `ta run` 相同的校验，一次报出所有文件的所有问题，不执行任何步骤 |
+| 机器可读的用例格式 | `ta schema`：包含所有已注册步骤的 JSON Schema，编辑器也能直接使用 |
 
-完整说明见[使用指南](docs/guide.md)：[用例格式](docs/guide.md#case-files)、[输出](docs/guide.md#output)、[失败包](docs/guide.md#failure-bundles)、[退出码](docs/guide.md#exit-codes)。使用指南目前只有英文版。
-
-## 路线图
-
-`ta` 一层一层地扩展。已发布的功能已勾选。
-
-- [x] YAML 用例、断言、变量、JSON 输出、细分退出码
-- [x] `http.request` 与 `cli.run` 步骤、失败包、自测套件
-- [x] 一行命令安装；Linux、macOS、Windows 的 x86_64 与 Arm64
-- [ ] `ta lint` 与 `ta schema`——进行中
-- [ ] 用例分类与筛选：project、suite、layer、tags
-- [ ] 网络、数据库、日志的只读观察者
-- [ ] Web 界面测试
-- [ ] Agent 集成：MCP 服务与技能文件
-- [ ] Android、桌面应用、iOS、鸿蒙
-- [ ] 以插件形式接入外部驱动，覆盖软件以外的领域
+完整说明见[使用指南](docs/guide.md)：[用例格式](docs/guide.md#case-files)、[输出](docs/guide.md#output)、[失败包](docs/guide.md#failure-bundles)、[用例检查](docs/guide.md#linting)、[Schema](docs/guide.md#schema)、[退出码](docs/guide.md#exit-codes)。使用指南目前只有英文版。
 
 ## 文档
 

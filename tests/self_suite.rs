@@ -6,13 +6,19 @@
 
 mod support;
 
+#[cfg(feature = "cli")]
 use std::fs;
+#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
 use std::process::Command;
 
+#[cfg(feature = "cli")]
 use serde_json::Value;
+#[cfg(feature = "cli")]
 use support::TempDir;
 
+#[cfg(feature = "cli")]
 #[test]
 fn the_self_suite_passes() {
     let ta = env!("CARGO_BIN_EXE_ta");
@@ -69,6 +75,7 @@ fn the_self_suite_passes() {
 }
 
 /// Every file called `name` anywhere below `dir`.
+#[cfg(feature = "cli")]
 fn files_named(dir: &Path, name: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
