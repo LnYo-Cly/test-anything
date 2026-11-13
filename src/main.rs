@@ -81,6 +81,9 @@ enum Command {
         /// Do not write failure bundles.
         #[arg(long)]
         no_bundle: bool,
+        /// Runs up to N cases at the same time. Defaults to 1.
+        #[arg(long, value_name = "N", default_value_t = 1, value_parser = parse_jobs)]
+        jobs: usize,
     },
     /// Validate case files without running them.
     Lint {
@@ -112,6 +115,22 @@ fn parse_var(text: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), value.to_string()))
 }
 
+/// Reads the `--jobs` count.
+///
+/// Zero is refused instead of treated as "one job" or "no job at all", because
+/// either reading would silently run something other than what was asked for.
+fn parse_jobs(text: &str) -> Result<usize, String> {
+    match text.parse::<usize>() {
+        Ok(0) => Err(
+            "a run needs at least 1 job; write `--jobs 1` to run one case at a time".to_string(),
+        ),
+        Ok(jobs) => Ok(jobs),
+        Err(_) => Err(format!(
+            "`{text}` is not a number of jobs; write `--jobs N` with N at least 1"
+        )),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -133,6 +152,7 @@ fn main() -> ExitCode {
             skip_tags,
             bundle_dir,
             no_bundle,
+            jobs,
         } => {
             let sources = match VarSources::load(&vars_files, &vars) {
                 Ok(sources) => sources,
@@ -146,7 +166,7 @@ fn main() -> ExitCode {
                 skip_tag: skip_tags,
             };
             run(
-                &paths, cli.output, &registry, &sources, &filters, bundle_dir, no_bundle,
+                &paths, cli.output, &registry, &sources, &filters, bundle_dir, no_bundle, jobs,
             )
         }
         Command::Lint {
@@ -205,6 +225,7 @@ fn run(
     filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
+    jobs: usize,
 ) -> ExitCode {
     let mut secrets = Secrets::new();
     let outcome = execute(
@@ -214,6 +235,7 @@ fn run(
         filters,
         bundle_dir,
         no_bundle,
+        jobs,
         &mut secrets,
     );
     let rendered = output::render(&outcome, format.into(), &secrets);
@@ -232,6 +254,7 @@ fn execute(
     filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
+    jobs: usize,
     secrets: &mut Secrets,
 ) -> RunOutcome {
     let LoadedCases { cases, errors, .. } = load_cases(paths, sources, secrets);
@@ -248,7 +271,15 @@ fn execute(
     };
 
     let bus = EventBus::new();
-    runner::run(&cases, registry, &bus, bundles.as_mut(), filters, secrets)
+    runner::run(
+        &cases,
+        registry,
+        &bus,
+        bundles.as_mut(),
+        filters,
+        secrets,
+        jobs,
+    )
 }
 
 /// Validates the cases without running them.
