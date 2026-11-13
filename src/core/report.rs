@@ -125,6 +125,8 @@ pub struct CaseReport {
     pub steps: Vec<StepReport>,
     /// The problem that made the case fail, if any.
     pub error: Option<Problem>,
+    /// Failure bundle directory, when one was written for this case.
+    pub bundle: Option<PathBuf>,
 }
 
 /// Every case of a run.
@@ -134,6 +136,11 @@ pub struct RunReport {
     pub cases: Vec<CaseReport>,
     /// How long the run took.
     pub duration: Duration,
+    /// Failure bundles that could not be written.
+    ///
+    /// A bundle is evidence for the reader, not part of the verdict, so these
+    /// are reported without changing the run's exit code.
+    pub bundle_errors: Vec<String>,
 }
 
 /// Counts derived from a [`RunReport`].
@@ -270,8 +277,10 @@ mod tests {
                     kind,
                     message: "problem".to_string(),
                 }),
+                bundle: None,
             }],
             duration: Duration::ZERO,
+            bundle_errors: Vec::new(),
         }
     }
 
@@ -322,6 +331,7 @@ mod tests {
         let report = RunReport {
             cases: Vec::new(),
             duration: Duration::ZERO,
+            bundle_errors: Vec::new(),
         };
 
         assert_eq!(RunOutcome::Completed(report).exit_code(), ExitCode::Success);

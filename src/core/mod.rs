@@ -6,6 +6,7 @@
 //! [`registry::Registry`]. A test in `tests/architecture.rs` enforces that.
 
 pub mod assert;
+pub mod bundle;
 pub mod case;
 pub mod events;
 pub mod output;

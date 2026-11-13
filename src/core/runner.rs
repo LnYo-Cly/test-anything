@@ -7,6 +7,7 @@ use jsonpath_rust::JsonPath;
 use serde_json::Value;
 
 use crate::core::assert::{self, AssertionReport};
+use crate::core::bundle::FailureBundles;
 use crate::core::case::{self, CaseError, LoadedCase, SavedValue, Step};
 use crate::core::events::{Event, EventBus};
 use crate::core::registry::{Registry, StepError};
@@ -19,7 +20,15 @@ use crate::core::report::{
 /// Validation covers step registration, argument schemas and variable
 /// references. If anything is invalid no case runs at all, because a partially
 /// executed run would make the result depend on case order.
-pub fn run(cases: &[LoadedCase], registry: &Registry, bus: &EventBus) -> RunOutcome {
+///
+/// When `bundles` is given, every case that did not pass gets a failure bundle
+/// before the next case starts.
+pub fn run(
+    cases: &[LoadedCase],
+    registry: &Registry,
+    bus: &EventBus,
+    mut bundles: Option<&mut FailureBundles>,
+) -> RunOutcome {
     let errors = preflight(cases, registry);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
@@ -29,12 +38,21 @@ pub fn run(cases: &[LoadedCase], registry: &Registry, bus: &EventBus) -> RunOutc
     bus.emit(Event::RunStarted { cases: cases.len() });
 
     let mut reports = Vec::with_capacity(cases.len());
+    let mut bundle_errors = Vec::new();
     for (index, loaded) in cases.iter().enumerate() {
         bus.emit(Event::CaseStarted {
             case: index,
             name: loaded.case.name.clone(),
         });
-        let report = run_case(index, loaded, registry, bus);
+        let mut report = run_case(index, loaded, registry, bus);
+        if report.status != CaseStatus::Passed
+            && let Some(writer) = bundles.as_deref_mut()
+        {
+            match writer.write(index, &report) {
+                Ok(directory) => report.bundle = Some(directory),
+                Err(message) => bundle_errors.push(message),
+            }
+        }
         bus.emit(Event::CaseFinished {
             case: index,
             name: report.name.clone(),
@@ -47,6 +65,7 @@ pub fn run(cases: &[LoadedCase], registry: &Registry, bus: &EventBus) -> RunOutc
     let report = RunReport {
         cases: reports,
         duration: started.elapsed(),
+        bundle_errors,
     };
     bus.emit(Event::RunFinished {
         summary: report.summary(),
@@ -190,6 +209,7 @@ fn run_case(index: usize, loaded: &LoadedCase, registry: &Registry, bus: &EventB
         duration: started.elapsed(),
         steps,
         error: stopped,
+        bundle: None,
     }
 }
 
@@ -358,7 +378,12 @@ mod tests {
     #[test]
     fn a_passing_case_returns_success() {
         let bus = EventBus::new();
-        let outcome = run(&loaded(vec![echo(json!(1), Vec::new())]), &registry(), &bus);
+        let outcome = run(
+            &loaded(vec![echo(json!(1), Vec::new())]),
+            &registry(),
+            &bus,
+            None,
+        );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Success);
         assert!(outcome.is_ok());
@@ -376,6 +401,7 @@ mod tests {
             &loaded(vec![failing, echo(json!(1), Vec::new())]),
             &registry(),
             &bus,
+            None,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
@@ -407,7 +433,7 @@ mod tests {
             case: test_case("other", vec![broken]),
         });
 
-        let outcome = run(&cases, &registry(), &bus);
+        let outcome = run(&cases, &registry(), &bus, None);
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Environment);
     }
@@ -431,7 +457,7 @@ mod tests {
                 .push(format!("{event:?}"));
         });
 
-        let outcome = run(&cases, &registry(), &bus);
+        let outcome = run(&cases, &registry(), &bus, None);
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
         let RunOutcome::Rejected { errors } = outcome else {
@@ -475,6 +501,7 @@ mod tests {
             &loaded(vec![echo(json!(1), Vec::new()), echo(json!(2), Vec::new())]),
             &registry(),
             &bus,
+            None,
         );
 
         assert!(outcome.is_ok());
@@ -511,8 +538,46 @@ mod tests {
             save: Vec::new(),
         };
 
-        let outcome = run(&loaded(vec![first, second]), &registry(), &bus);
+        let outcome = run(&loaded(vec![first, second]), &registry(), &bus, None);
 
         assert!(outcome.is_ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn only_the_failing_case_gets_a_bundle() {
+        let dir = std::env::temp_dir().join(format!("ta-runner-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
+        let source = dir.join("failing.yaml");
+        std::fs::write(&source, "name: case\nsteps: []\n").expect("the case file must be written");
+
+        let mut failing = echo(json!("wrong"), Vec::new());
+        failing.expect = vec![crate::core::case::Expectation {
+            path: "$".to_string(),
+            matcher: crate::core::case::Matcher::Equals(json!("right")),
+        }];
+        let mut cases = loaded(vec![failing]);
+        cases[0].path = source;
+        cases.push(LoadedCase {
+            path: "other.yaml".into(),
+            case: test_case("other", vec![echo(json!(1), Vec::new())]),
+        });
+
+        let mut bundles = FailureBundles::new(dir.join("failures"));
+        let bus = EventBus::new();
+        let outcome = run(&cases, &registry(), &bus, Some(&mut bundles));
+
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        let bundle = report.cases[0]
+            .bundle
+            .as_ref()
+            .expect("the failed case must get a bundle");
+        assert!(bundle.join("meta.json").is_file(), "{bundle:?}");
+        assert!(report.cases[1].bundle.is_none());
+        assert!(report.bundle_errors.is_empty(), "{report:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

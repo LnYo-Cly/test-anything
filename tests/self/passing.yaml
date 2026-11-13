@@ -1,0 +1,10 @@
+name: A passing case exits zero
+steps:
+  - cli.run:
+      command: ${ta}
+      args: [run, tests/self/fixtures/passing.case, --var, "ta=${ta}"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.stdout
+        contains: "PASS"

@@ -31,7 +31,12 @@ pub fn render(outcome: &RunOutcome, format: Format) -> Rendered {
     match format {
         Format::Json => Rendered {
             stdout: format!("{}\n", json_report(outcome)),
-            stderr: String::new(),
+            // Diagnostics never go to standard output, so a bundle that could
+            // not be written is repeated on standard error in both formats.
+            stderr: match outcome {
+                RunOutcome::Completed(report) => bundle_errors(report),
+                RunOutcome::Rejected { .. } => String::new(),
+            },
         },
         Format::Text => text_report(outcome),
     }
@@ -75,6 +80,9 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
                 }
             }
         }
+        if let Some(bundle) = &case.bundle {
+            stdout.push_str(&format!("  bundle: {}\n", bundle.display()));
+        }
     }
 
     let summary = report.summary();
@@ -96,8 +104,17 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
 
     Rendered {
         stdout,
-        stderr: String::new(),
+        stderr: bundle_errors(report),
     }
+}
+
+/// Renders the bundles that could not be written as diagnostics.
+fn bundle_errors(report: &crate::core::report::RunReport) -> String {
+    let mut stderr = String::new();
+    for error in &report.bundle_errors {
+        stderr.push_str(&format!("error: {error}\n"));
+    }
+    stderr
 }
 
 /// Picks the singular or plural form for a count.
@@ -140,17 +157,30 @@ fn json_report(outcome: &RunOutcome) -> Value {
     let mut object = Map::new();
     object.insert("ok".to_string(), Value::Bool(outcome.is_ok()));
 
-    let (summary, duration) = match outcome {
-        RunOutcome::Completed(report) => (report.summary(), report.duration),
-        RunOutcome::Rejected { .. } => (Summary::default(), std::time::Duration::ZERO),
+    let (summary, duration, bundle_errors) = match outcome {
+        RunOutcome::Completed(report) => (
+            report.summary(),
+            report.duration,
+            report.bundle_errors.as_slice(),
+        ),
+        RunOutcome::Rejected { .. } => (Summary::default(), std::time::Duration::ZERO, &[][..]),
     };
     object.insert("summary".to_string(), summary_value(&summary, duration));
+    object.insert(
+        "bundle_errors".to_string(),
+        Value::Array(
+            bundle_errors
+                .iter()
+                .map(|error| Value::String(error.clone()))
+                .collect(),
+        ),
+    );
 
     match outcome {
         RunOutcome::Completed(report) => {
             object.insert(
                 "cases".to_string(),
-                Value::Array(report.cases.iter().map(case_value).collect()),
+                Value::Array(report.cases.iter().map(case_json).collect()),
             );
             object.insert("errors".to_string(), Value::Array(Vec::new()));
         }
@@ -192,12 +222,17 @@ fn summary_value(summary: &Summary, duration: std::time::Duration) -> Value {
     })
 }
 
-fn case_value(case: &CaseReport) -> Value {
+/// Renders one case the way `--output json` shows it.
+///
+/// A failure bundle uses this for its `report.json`, so the bundle and the
+/// command output cannot describe the same case differently.
+pub fn case_json(case: &CaseReport) -> Value {
     json!({
         "file": case.file.display().to_string(),
         "name": case.name,
         "status": case.status.as_str(),
         "duration_ms": millis(case.duration),
+        "bundle": case.bundle.as_ref().map(|path| path.display().to_string()),
         "steps": case.steps.iter().map(step_value).collect::<Vec<Value>>(),
         "error": case.error.as_ref().map(problem_value),
     })
@@ -273,8 +308,10 @@ mod tests {
                     kind: ProblemKind::Assertion,
                     message: "1 of 1 assertions failed".to_string(),
                 }),
+                bundle: Some(PathBuf::from(".ta/failures/17-42/0-Login")),
             }],
             duration: Duration::from_millis(4),
+            bundle_errors: Vec::new(),
         })
     }
 
@@ -293,6 +330,13 @@ mod tests {
             "got: {}",
             rendered.stdout
         );
+        assert!(
+            rendered
+                .stdout
+                .contains("  bundle: .ta/failures/17-42/0-Login"),
+            "the bundle path belongs under the failed case, got: {}",
+            rendered.stdout
+        );
         assert!(rendered.stdout.contains("Summary: 1 case"));
     }
 
@@ -306,6 +350,7 @@ mod tests {
         assert_eq!(value["summary"]["cases_failed"], 1);
         assert_eq!(value["summary"]["steps_failed"], 1);
         assert_eq!(value["cases"][0]["duration_ms"], 3);
+        assert_eq!(value["cases"][0]["bundle"], ".ta/failures/17-42/0-Login");
         assert_eq!(value["cases"][0]["steps"][0]["status"], "failed");
         assert_eq!(
             value["cases"][0]["steps"][0]["assertions"][0]["passed"],
@@ -317,6 +362,39 @@ mod tests {
         );
         assert_eq!(value["cases"][0]["steps"][0]["error"]["kind"], "assertion");
         assert_eq!(value["errors"], json!([]));
+        assert_eq!(value["bundle_errors"], json!([]));
+    }
+
+    #[test]
+    fn a_bundle_that_could_not_be_written_is_reported_without_changing_the_verdict() {
+        let RunOutcome::Completed(mut report) = failing_outcome() else {
+            panic!("the fixture must be a completed run");
+        };
+        report
+            .bundle_errors
+            .push("could not write the bundle".to_string());
+        report.cases[0].bundle = None;
+        let outcome = RunOutcome::Completed(report);
+
+        assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
+
+        let text = render(&outcome, Format::Text);
+        assert!(
+            text.stderr.contains("could not write the bundle"),
+            "got: {}",
+            text.stderr
+        );
+        assert!(!text.stdout.contains("bundle:"), "got: {}", text.stdout);
+
+        let json = render(&outcome, Format::Json);
+        let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
+        assert_eq!(value["bundle_errors"][0], "could not write the bundle");
+        assert_eq!(value["cases"][0]["bundle"], Value::Null);
+        assert!(
+            json.stderr.contains("could not write the bundle"),
+            "got: {}",
+            json.stderr
+        );
     }
 
     #[test]

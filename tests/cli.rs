@@ -2,15 +2,33 @@
 
 mod support;
 
+use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
 use support::{TempDir, TestServer, closed_port};
 
+/// The binary under test, as an absolute path.
+fn ta() -> &'static str {
+    env!("CARGO_BIN_EXE_ta")
+}
+
+/// Runs the binary with an empty working directory of its own.
+///
+/// A run that fails writes a failure bundle under `.ta/failures` in the current
+/// directory, so every run gets a directory that is removed with it instead of
+/// filling the checkout of whoever runs the tests.
 fn run_ta(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ta"))
+    let work = TempDir::new("cwd");
+    run_ta_in(work.path(), args)
+}
+
+/// Runs the binary with `dir` as its working directory.
+fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(ta())
+        .current_dir(dir)
         .args(args)
         .output()
         .expect("failed to run the ta binary")
@@ -684,7 +702,8 @@ steps:
         ),
     );
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ta"))
+    let mut child = Command::new(ta())
+        .current_dir(dir.path())
         .args(["run", path_str(&case)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -730,7 +749,8 @@ steps:
         ),
     );
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ta"))
+    let mut child = Command::new(ta())
+        .current_dir(dir.path())
         .args(["run", path_str(&case)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -752,5 +772,532 @@ steps:
     assert!(
         !stderr.contains("panicked"),
         "ta panicked instead of ending quietly: {stderr:?}"
+    );
+}
+
+/// A case whose only step runs `ta --version` and expects the wrong exit code.
+///
+/// The program under test is `ta` itself: the failure paths must not depend on
+/// a system command such as `false` or `exit`, which differ across platforms.
+fn wrong_expectation_case(name: &str) -> String {
+    format!(
+        r#"
+name: {name}
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["--version"]
+    expect:
+      - path: $.exit_code
+        equals: 42
+"#,
+        ta()
+    )
+}
+
+#[test]
+fn a_cli_step_reports_exit_code_stdout_stderr_and_parsed_json() {
+    let dir = TempDir::new("cli-step");
+    let case = dir.write(
+        "cli.yaml",
+        &format!(
+            r#"
+name: CLI step
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["--version"]
+      stdin: "ignored input"
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.stdout
+        contains: "ta "
+      - path: $.stderr
+        equals: ""
+      - path: $.json
+        exists: false
+  - cli.run:
+      command: '{}'
+      args: ["nosuch-subcommand"]
+    expect:
+      - path: $.exit_code
+        equals: 2
+      - path: $.stderr
+        not_equals: ""
+      - path: $.stdout
+        equals: ""
+      - path: $.json
+        exists: false
+"#,
+            ta(),
+            ta()
+        ),
+    );
+
+    let output = run_ta(&["run", path_str(&case)]);
+
+    assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
+}
+
+#[test]
+fn a_cli_step_runs_in_the_requested_working_directory() {
+    let dir = TempDir::new("cli-cwd");
+    dir.write(
+        "inner.yaml",
+        &format!(
+            "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
+            ta()
+        ),
+    );
+    let case = dir.write(
+        "outer.yaml",
+        &format!(
+            r#"
+name: Working directory
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["run", "inner.yaml"]
+      cwd: '{}'
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.stdout
+        contains: "PASS"
+"#,
+            ta(),
+            dir.path().display()
+        ),
+    );
+
+    let output = run_ta(&["run", path_str(&case)]);
+
+    assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
+}
+
+#[test]
+fn a_missing_program_exits_four_and_names_it() {
+    let dir = TempDir::new("cli-missing");
+    let case = dir.write(
+        "missing.yaml",
+        "name: Missing program\nsteps:\n  - cli.run:\n      command: ta-no-such-program-4ba42\n",
+    );
+
+    let output = run_ta(&["run", path_str(&case)]);
+
+    assert_eq!(exit_code(&output), Some(4), "stderr: {:?}", stderr(&output));
+    assert!(
+        stdout(&output).contains("ta-no-such-program-4ba42"),
+        "the message must name the program, got: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_cli_step_with_invalid_arguments_exits_three() {
+    let dir = TempDir::new("cli-invalid-args");
+    let unknown = dir.write(
+        "unknown.yaml",
+        &format!(
+            "name: Unknown argument\nsteps:\n  - cli.run:\n      cmnd: '{}'\n      command: '{}'\n",
+            ta(),
+            ta()
+        ),
+    );
+    let zero = dir.write(
+        "zero.yaml",
+        &format!(
+            "name: Zero timeout\nsteps:\n  - cli.run:\n      command: '{}'\n      timeout_ms: 0\n",
+            ta()
+        ),
+    );
+
+    let unknown_output = run_ta(&["run", path_str(&unknown)]);
+    assert_eq!(exit_code(&unknown_output), Some(3));
+    assert!(
+        stderr(&unknown_output).contains("cmnd"),
+        "got: {:?}",
+        stderr(&unknown_output)
+    );
+
+    let zero_output = run_ta(&["run", path_str(&zero)]);
+    assert_eq!(exit_code(&zero_output), Some(3));
+    assert!(
+        stderr(&zero_output).contains("timeout_ms"),
+        "got: {:?}",
+        stderr(&zero_output)
+    );
+}
+
+#[test]
+fn a_cli_step_that_exceeds_its_timeout_exits_five() {
+    let server = TestServer::start();
+    let dir = TempDir::new("cli-timeout");
+    // The child is `ta` itself, waiting on a local service that answers slowly.
+    let slow = dir.write(
+        "slow.yaml",
+        &format!(
+            "name: Slow\nsteps:\n  - http.request:\n      url: {base}/slow\n      timeout_ms: 10000\n",
+            base = server.url("")
+        ),
+    );
+    let case = dir.write(
+        "timeout.yaml",
+        &format!(
+            r#"
+name: Slow program
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["run", '{}']
+      timeout_ms: 150
+"#,
+            ta(),
+            slow.display()
+        ),
+    );
+
+    let started = std::time::Instant::now();
+    let output = run_ta(&["run", path_str(&case)]);
+    let elapsed = started.elapsed();
+
+    assert_eq!(exit_code(&output), Some(5), "stderr: {:?}", stderr(&output));
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "the run must stop soon after the timeout, took {elapsed:?}"
+    );
+}
+
+#[test]
+fn a_cli_step_reads_more_output_than_a_pipe_buffer() {
+    let dir = TempDir::new("cli-big-output");
+    // Far more than the 64 KiB a pipe holds, so a reader that waits for the
+    // process before draining deadlocks instead of finishing.
+    let expected = "x".repeat(512 * 1024);
+    let inner = dir.write(
+        "inner.yaml",
+        &format!(
+            r#"
+name: Huge output
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["--version"]
+    expect:
+      - path: $.stdout
+        equals: "{expected}"
+"#,
+            ta()
+        ),
+    );
+    let case = dir.write(
+        "outer.yaml",
+        &format!(
+            r#"
+name: Big output
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["run", '{}']
+    expect:
+      - path: $.exit_code
+        equals: 1
+      - path: $.stdout
+        contains: "Huge output"
+      - path: $.stderr
+        equals: ""
+"#,
+            ta(),
+            inner.display()
+        ),
+    );
+
+    let output = run_ta(&["run", path_str(&case)]);
+
+    assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
+}
+
+#[test]
+fn a_failing_case_writes_a_complete_bundle() {
+    let dir = TempDir::new("bundle");
+    let case = dir.write("failing.yaml", &wrong_expectation_case("Wrong exit code"));
+    let root = dir.path().join("failures");
+
+    let output = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(&case),
+        "--bundle-dir",
+        path_str(&root),
+    ]);
+
+    assert_eq!(exit_code(&output), Some(1), "stderr: {:?}", stderr(&output));
+    let value = json_stdout(&output);
+    let reported = value["cases"][0]["bundle"]
+        .as_str()
+        .expect("a failed case must report its bundle");
+    let bundle = PathBuf::from(reported);
+    assert!(
+        bundle.starts_with(&root),
+        "the bundle must live under the requested directory, got: {reported}"
+    );
+
+    for name in ["case.yaml", "report.json", "meta.json"] {
+        assert!(
+            bundle.join(name).is_file(),
+            "the bundle must contain {name}: {reported}"
+        );
+    }
+
+    let meta: Value = serde_json::from_str(
+        &fs::read_to_string(bundle.join("meta.json")).expect("meta.json must be readable"),
+    )
+    .expect("meta.json must be JSON");
+    assert_eq!(meta["schema_version"], 1);
+    assert_eq!(meta["ta_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(meta["case_name"], "Wrong exit code");
+    assert_eq!(meta["status"], "failed");
+    assert!(
+        meta["case_file"]
+            .as_str()
+            .is_some_and(|file| file.ends_with("failing.yaml")),
+        "got: {meta}"
+    );
+    assert!(
+        meta["created_at"].as_u64().is_some_and(|millis| millis > 0),
+        "got: {meta}"
+    );
+
+    let report: Value = serde_json::from_str(
+        &fs::read_to_string(bundle.join("report.json")).expect("report.json must be readable"),
+    )
+    .expect("report.json must be JSON");
+    assert_eq!(report["name"], value["cases"][0]["name"]);
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["bundle"], value["cases"][0]["bundle"]);
+    assert_eq!(report["steps"][0]["assertions"][0]["passed"], false);
+
+    assert_eq!(
+        fs::read(bundle.join("case.yaml")).expect("case.yaml must be readable"),
+        fs::read(&case).expect("the case file must be readable"),
+        "case.yaml must be a copy of the case file"
+    );
+
+    let run_dir = bundle.parent().expect("a bundle has a run directory");
+    let entries: Vec<_> = fs::read_dir(run_dir)
+        .expect("the run directory must be readable")
+        .map(|entry| entry.expect("the entry must be readable").file_name())
+        .collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "no staging directory may be left behind: {entries:?}"
+    );
+}
+
+#[test]
+fn a_passing_run_creates_no_bundle_directory() {
+    let dir = TempDir::new("bundle-passing");
+    let case = dir.write(
+        "passing.yaml",
+        &format!(
+            "name: Passing\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
+            ta()
+        ),
+    );
+    let root = dir.path().join("failures");
+
+    let output = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(&case),
+        "--bundle-dir",
+        path_str(&root),
+    ]);
+
+    assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
+    assert!(
+        !root.exists(),
+        "a passing run must not create the bundle directory"
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["cases"][0]["bundle"], Value::Null);
+}
+
+#[test]
+fn no_bundle_turns_the_failure_bundle_off() {
+    let dir = TempDir::new("bundle-off");
+    let case = dir.write("failing.yaml", &wrong_expectation_case("No bundle"));
+
+    let output = run_ta_in(
+        dir.path(),
+        &["--output", "json", "run", path_str(&case), "--no-bundle"],
+    );
+
+    assert_eq!(exit_code(&output), Some(1), "stderr: {:?}", stderr(&output));
+    assert!(
+        !dir.path().join(".ta").exists(),
+        "the default bundle directory must not be created"
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["cases"][0]["bundle"], Value::Null);
+}
+
+#[test]
+fn a_bundle_that_cannot_be_written_keeps_the_exit_code_and_is_reported() {
+    let dir = TempDir::new("bundle-blocked");
+    let case = dir.write("failing.yaml", &wrong_expectation_case("Blocked bundle"));
+    // A file where the directory should be makes creating the run directory fail.
+    let blocked = dir.path().join("blocked");
+    fs::write(&blocked, "not a directory").expect("the fixture file must be written");
+
+    let output = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(&case),
+        "--bundle-dir",
+        path_str(&blocked),
+    ]);
+
+    assert_eq!(
+        exit_code(&output),
+        Some(1),
+        "a bundle failure must not change the exit code; stderr: {:?}",
+        stderr(&output)
+    );
+    let value = json_stdout(&output);
+    assert_eq!(value["cases"][0]["bundle"], Value::Null);
+    assert!(
+        value["bundle_errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty()),
+        "the failure must be reported in the JSON output, got: {value}"
+    );
+    assert!(
+        stderr(&output).contains("failure bundle"),
+        "the failure must be reported on stderr, got: {:?}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn var_overrides_a_variable_from_the_case_file() {
+    let dir = TempDir::new("var");
+    let inner = dir.write(
+        "inner.yaml",
+        &format!(
+            "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
+            ta()
+        ),
+    );
+    let case = dir.write(
+        "vars.yaml",
+        &format!(
+            r#"
+name: Variables
+vars:
+  target: does-not-exist.yaml
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["run", "${{target}}"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+"#,
+            ta()
+        ),
+    );
+
+    let without = run_ta(&["run", path_str(&case)]);
+    assert_eq!(
+        exit_code(&without),
+        Some(1),
+        "the case file's value points at a missing file, so the step exits 3; stdout: {:?}",
+        stdout(&without)
+    );
+
+    let with = run_ta(&[
+        "run",
+        path_str(&case),
+        "--var",
+        &format!("target={}", inner.display()),
+    ]);
+    assert_eq!(exit_code(&with), Some(0), "stderr: {:?}", stderr(&with));
+}
+
+#[test]
+fn var_can_define_a_variable_the_case_file_does_not() {
+    let dir = TempDir::new("var-new");
+    let inner = dir.write(
+        "inner.yaml",
+        &format!(
+            "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
+            ta()
+        ),
+    );
+    let case = dir.write(
+        "vars.yaml",
+        &format!(
+            r#"
+name: Variables from the command line
+steps:
+  - cli.run:
+      command: '{}'
+      args: ["run", "${{target}}"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+"#,
+            ta()
+        ),
+    );
+
+    let without = run_ta(&["run", path_str(&case)]);
+    assert_eq!(exit_code(&without), Some(3));
+    assert!(
+        stderr(&without).contains("target"),
+        "got: {:?}",
+        stderr(&without)
+    );
+
+    let with = run_ta(&[
+        "run",
+        path_str(&case),
+        "--var",
+        &format!("target={}", inner.display()),
+    ]);
+    assert_eq!(exit_code(&with), Some(0), "stderr: {:?}", stderr(&with));
+}
+
+#[test]
+fn a_malformed_var_exits_two_with_the_expected_form() {
+    let dir = TempDir::new("var-malformed");
+    let case = dir.write(
+        "passing.yaml",
+        &format!(
+            "name: Passing\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
+            ta()
+        ),
+    );
+
+    let missing_equals = run_ta(&["run", path_str(&case), "--var", "novalue"]);
+    assert_eq!(exit_code(&missing_equals), Some(2));
+    assert!(
+        stderr(&missing_equals).contains("--var name=value"),
+        "the message must show the expected form, got: {:?}",
+        stderr(&missing_equals)
+    );
+
+    let empty_name = run_ta(&["run", path_str(&case), "--var", "=value"]);
+    assert_eq!(exit_code(&empty_name), Some(2));
+    assert!(
+        stderr(&empty_name).contains("--var name=value"),
+        "the message must show the expected form, got: {:?}",
+        stderr(&empty_name)
     );
 }

@@ -1,0 +1,8 @@
+name: Failing fixture
+steps:
+  - cli.run:
+      command: ${ta}
+      args: ["--version"]
+    expect:
+      - path: $.exit_code
+        equals: 42

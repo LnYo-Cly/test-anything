@@ -1,0 +1,16 @@
+name: A failed assertion exits one and is visible in the JSON output
+steps:
+  - cli.run:
+      command: ${ta}
+      args: [--output, json, run, tests/self/fixtures/failing.case, --no-bundle, --var, "ta=${ta}"]
+    expect:
+      - path: $.exit_code
+        equals: 1
+      - path: $.json.cases[0].status
+        equals: failed
+      - path: $.json.cases[0].steps[0].assertions[0].passed
+        equals: false
+      - path: $.json.cases[0].steps[0].assertions[0].expected
+        equals: 42
+      - path: $.json.cases[0].steps[0].assertions[0].actual
+        equals: 0
