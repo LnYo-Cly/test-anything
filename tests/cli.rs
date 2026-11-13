@@ -1,4 +1,4 @@
-﻿//! End-to-end tests that run the compiled `ta` binary.
+//! End-to-end tests that run the compiled `ta` binary.
 
 mod support;
 
