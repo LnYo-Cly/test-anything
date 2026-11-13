@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly run on main: catches new Rust stable lints and newly published
+  # advisories even when nothing was pushed.
+  schedule:
+    - cron: "0 1 * * 1"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
