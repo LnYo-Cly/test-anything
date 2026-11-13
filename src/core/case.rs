@@ -1,6 +1,6 @@
 //! Case files: the YAML model, loading, discovery and variable substitution.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use jsonpath_rust::JsonPath;
@@ -14,6 +14,14 @@ pub struct Case {
     pub name: String,
     /// Variables defined for the whole case.
     pub vars: BTreeMap<String, String>,
+    /// Project the case belongs to, if it declares one.
+    pub project: Option<String>,
+    /// Suite the case belongs to, if it declares one.
+    pub suite: Option<String>,
+    /// Free-form layer of the case, if it declares one.
+    pub layer: Option<String>,
+    /// Tags of the case, in declaration order. Empty when it has none.
+    pub tags: Vec<String>,
     /// Steps, executed in order until one fails.
     pub steps: Vec<Step>,
 }
@@ -106,6 +114,11 @@ struct RawCase {
     name: String,
     #[serde(default)]
     vars: BTreeMap<String, Value>,
+    project: Option<String>,
+    suite: Option<String>,
+    layer: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
     steps: Vec<Map<String, Value>>,
 }
 
@@ -155,8 +168,40 @@ pub fn parse(text: &str) -> Result<Case, String> {
     Ok(Case {
         name: raw.name,
         vars,
+        project: classification(raw.project, "project")?,
+        suite: classification(raw.suite, "suite")?,
+        layer: classification(raw.layer, "layer")?,
+        tags: classification_tags(raw.tags)?,
         steps,
     })
+}
+
+/// Checks one optional classification value.
+///
+/// A value is used as written and never interpolated, so an empty value is
+/// always a mistake rather than a reference to a variable.
+fn classification(value: Option<String>, field: &str) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(text) if text.trim().is_empty() => Err(format!(
+            "`{field}` is empty; give it a value or remove the field"
+        )),
+        Some(text) => Ok(Some(text)),
+    }
+}
+
+/// Checks the tag list: every tag needs a value and may appear only once.
+fn classification_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
+    let mut seen = BTreeSet::new();
+    for tag in &tags {
+        if tag.trim().is_empty() {
+            return Err("`tags` contains an empty tag; give it a value or remove it".to_string());
+        }
+        if !seen.insert(tag.as_str()) {
+            return Err(format!("`tags` contains `{tag}` twice; keep each tag once"));
+        }
+    }
+    Ok(tags)
 }
 
 fn parse_step(index: usize, mut map: Map<String, Value>) -> Result<Step, String> {
@@ -512,6 +557,73 @@ steps:
         assert_eq!(case.steps[0].expect.len(), 1);
         assert_eq!(case.steps[0].expect[0].matcher.comparison(), "equals");
         assert_eq!(case.steps[0].save[0].name, "token");
+    }
+
+    #[test]
+    fn parses_the_optional_classification() {
+        let case = parse(
+            "name: Example\nproject: shop\nsuite: smoke\nlayer: api\ntags:\n  - smoke\n  - fast\nsteps:\n  - sample.call:\n      target: local\n",
+        )
+        .expect("the case must parse");
+
+        assert_eq!(case.project.as_deref(), Some("shop"));
+        assert_eq!(case.suite.as_deref(), Some("smoke"));
+        assert_eq!(case.layer.as_deref(), Some("api"));
+        assert_eq!(case.tags, vec!["smoke", "fast"]);
+    }
+
+    #[test]
+    fn a_case_without_classification_leaves_every_field_empty() {
+        let case = parse("name: Example\nsteps:\n  - sample.call:\n      target: local\n")
+            .expect("the case must parse");
+
+        assert_eq!(case.project, None);
+        assert_eq!(case.suite, None);
+        assert_eq!(case.layer, None);
+        assert!(case.tags.is_empty());
+    }
+
+    #[test]
+    fn classification_values_are_not_interpolated() {
+        let case = parse(
+            "name: Example\nproject: \"${project}\"\nsteps:\n  - sample.call:\n      target: local\n",
+        )
+        .expect("the case must parse");
+
+        assert_eq!(case.project.as_deref(), Some("${project}"));
+    }
+
+    #[test]
+    fn rejects_a_duplicate_tag_and_names_it() {
+        let error = parse(
+            "name: Broken\ntags:\n  - smoke\n  - smoke\nsteps:\n  - sample.call:\n      target: local\n",
+        )
+        .expect_err("the case must be rejected");
+
+        assert!(error.contains("smoke"), "got: {error}");
+        assert!(error.contains("twice"), "got: {error}");
+    }
+
+    #[test]
+    fn rejects_an_empty_classification_value() {
+        for field in ["project", "suite", "layer"] {
+            let text = format!(
+                "name: Broken\n{field}: \"\"\nsteps:\n  - sample.call:\n      target: local\n"
+            );
+            let error = parse(&text).expect_err("the case must be rejected");
+
+            assert!(error.contains(field), "got: {error}");
+            assert!(error.contains("empty"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_empty_tag() {
+        let error =
+            parse("name: Broken\ntags:\n  - \"\"\nsteps:\n  - sample.call:\n      target: local\n")
+                .expect_err("the case must be rejected");
+
+        assert!(error.contains("tags"), "got: {error}");
     }
 
     #[test]

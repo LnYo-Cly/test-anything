@@ -9,6 +9,7 @@ pub mod assert;
 pub mod bundle;
 pub mod case;
 pub mod events;
+pub mod filter;
 pub mod output;
 pub mod registry;
 pub mod report;

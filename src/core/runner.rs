@@ -10,36 +10,53 @@ use crate::core::assert::{self, AssertionReport};
 use crate::core::bundle::FailureBundles;
 use crate::core::case::{self, CaseError, LoadedCase, SavedValue, Step};
 use crate::core::events::{Event, EventBus};
+use crate::core::filter::{self, Filters};
 use crate::core::registry::{Registry, StepError};
 use crate::core::report::{
     CaseReport, CaseStatus, Problem, ProblemKind, RunOutcome, RunReport, StepReport, StepStatus,
 };
 
-/// Validates every case, then runs them in the order given.
+/// Validates every case, then runs the ones the filters select.
 ///
 /// Validation covers step registration, argument schemas and variable
-/// references. If anything is invalid no case runs at all, because a partially
-/// executed run would make the result depend on case order.
+/// references, and it always covers every discovered case: a filter must not
+/// let an invalid file escape the check. If anything is invalid no case runs at
+/// all, because a partially executed run would make the result depend on case
+/// order.
 ///
-/// When `bundles` is given, every case that did not pass gets a failure bundle
-/// before the next case starts.
+/// When `bundles` is given, every selected case that did not pass gets a
+/// failure bundle before the next case starts.
 pub fn run(
     cases: &[LoadedCase],
     registry: &Registry,
     bus: &EventBus,
     mut bundles: Option<&mut FailureBundles>,
+    filters: &Filters,
 ) -> RunOutcome {
     let errors = preflight(cases, registry);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
 
-    let started = Instant::now();
-    bus.emit(Event::RunStarted { cases: cases.len() });
+    let selected: Vec<&LoadedCase> = cases
+        .iter()
+        .filter(|loaded| filters.matches(&loaded.case))
+        .collect();
+    if selected.is_empty() && !filters.is_empty() {
+        return RunOutcome::NoMatch {
+            message: filter::no_match_message(filters, &filter::Available::of(cases)),
+        };
+    }
+    let filtered = cases.len() - selected.len();
 
-    let mut reports = Vec::with_capacity(cases.len());
+    let started = Instant::now();
+    bus.emit(Event::RunStarted {
+        cases: selected.len(),
+    });
+
+    let mut reports = Vec::with_capacity(selected.len());
     let mut bundle_errors = Vec::new();
-    for (index, loaded) in cases.iter().enumerate() {
+    for (index, loaded) in selected.into_iter().enumerate() {
         bus.emit(Event::CaseStarted {
             case: index,
             name: loaded.case.name.clone(),
@@ -64,6 +81,7 @@ pub fn run(
 
     let report = RunReport {
         cases: reports,
+        filtered,
         duration: started.elapsed(),
         bundle_errors,
     };
@@ -208,6 +226,10 @@ fn run_case(index: usize, loaded: &LoadedCase, registry: &Registry, bus: &EventB
     CaseReport {
         file: loaded.path.clone(),
         name: loaded.case.name.clone(),
+        project: loaded.case.project.clone(),
+        suite: loaded.case.suite.clone(),
+        layer: loaded.case.layer.clone(),
+        tags: loaded.case.tags.clone(),
         status,
         duration: started.elapsed(),
         steps,
@@ -325,6 +347,10 @@ mod tests {
         Case {
             name: name.to_string(),
             vars: BTreeMap::new(),
+            project: None,
+            suite: None,
+            layer: None,
+            tags: Vec::new(),
             steps,
         }
     }
@@ -386,6 +412,7 @@ mod tests {
             &registry(),
             &bus,
             None,
+            &Filters::default(),
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Success);
@@ -405,6 +432,7 @@ mod tests {
             &registry(),
             &bus,
             None,
+            &Filters::default(),
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
@@ -436,7 +464,7 @@ mod tests {
             case: test_case("other", vec![broken]),
         });
 
-        let outcome = run(&cases, &registry(), &bus, None);
+        let outcome = run(&cases, &registry(), &bus, None, &Filters::default());
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Environment);
     }
@@ -460,7 +488,7 @@ mod tests {
                 .push(format!("{event:?}"));
         });
 
-        let outcome = run(&cases, &registry(), &bus, None);
+        let outcome = run(&cases, &registry(), &bus, None, &Filters::default());
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
         let RunOutcome::Rejected { errors } = outcome else {
@@ -505,6 +533,7 @@ mod tests {
             &registry(),
             &bus,
             None,
+            &Filters::default(),
         );
 
         assert!(outcome.is_ok());
@@ -541,7 +570,13 @@ mod tests {
             save: Vec::new(),
         };
 
-        let outcome = run(&loaded(vec![first, second]), &registry(), &bus, None);
+        let outcome = run(
+            &loaded(vec![first, second]),
+            &registry(),
+            &bus,
+            None,
+            &Filters::default(),
+        );
 
         assert!(outcome.is_ok(), "{outcome:?}");
     }
@@ -568,7 +603,13 @@ mod tests {
 
         let mut bundles = FailureBundles::new(dir.join("failures"));
         let bus = EventBus::new();
-        let outcome = run(&cases, &registry(), &bus, Some(&mut bundles));
+        let outcome = run(
+            &cases,
+            &registry(),
+            &bus,
+            Some(&mut bundles),
+            &Filters::default(),
+        );
 
         let RunOutcome::Completed(report) = outcome else {
             panic!("the run must complete");
@@ -582,5 +623,94 @@ mod tests {
         assert!(report.bundle_errors.is_empty(), "{report:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn filters_select_which_cases_run_and_count_the_rest() {
+        let mut cases = loaded(vec![echo(json!(1), Vec::new())]);
+        cases[0].case.project = Some("shop".to_string());
+        cases[0].case.layer = Some("api".to_string());
+        cases[0].case.tags = vec!["smoke".to_string()];
+        let mut excluded = LoadedCase {
+            path: "other.yaml".into(),
+            case: test_case("other", vec![echo(json!(2), Vec::new())]),
+        };
+        excluded.case.layer = Some("cli".to_string());
+        cases.push(excluded);
+        let filters = Filters {
+            project: vec!["shop".to_string()],
+            layer: vec!["api".to_string()],
+            tag: vec!["smoke".to_string()],
+            ..Filters::default()
+        };
+
+        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        assert_eq!(report.cases.len(), 1);
+        assert_eq!(report.cases[0].name, "case");
+        assert_eq!(report.cases[0].layer.as_deref(), Some("api"));
+        assert_eq!(report.cases[0].tags, vec!["smoke".to_string()]);
+        assert_eq!(report.filtered, 1);
+        assert_eq!(report.summary().filtered, 1);
+    }
+
+    #[test]
+    fn filters_that_select_nothing_are_reported_with_the_available_values() {
+        let mut cases = loaded(vec![echo(json!(1), Vec::new())]);
+        cases[0].case.layer = Some("api".to_string());
+        cases[0].case.tags = vec!["smoke".to_string()];
+        let filters = Filters {
+            tag: vec!["missing".to_string()],
+            ..Filters::default()
+        };
+
+        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+
+        assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Usage);
+        let RunOutcome::NoMatch { message } = outcome else {
+            panic!("the run must report that nothing matched");
+        };
+        assert!(message.contains("--tag \"missing\""), "got: {message}");
+        assert!(message.contains("`smoke`"), "got: {message}");
+    }
+
+    #[test]
+    fn a_filter_does_not_hide_an_invalid_case() {
+        let mut cases = loaded(vec![echo(json!(1), Vec::new())]);
+        cases[0].case.layer = Some("api".to_string());
+        let mut broken = LoadedCase {
+            path: "broken.yaml".into(),
+            case: test_case(
+                "broken",
+                vec![Step {
+                    action: "no.such.step".to_string(),
+                    args: json!({}),
+                    expect: Vec::new(),
+                    save: Vec::new(),
+                }],
+            ),
+        };
+        broken.case.layer = Some("cli".to_string());
+        cases.push(broken);
+        let filters = Filters {
+            layer: vec!["api".to_string()],
+            ..Filters::default()
+        };
+
+        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+
+        assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
+        let RunOutcome::Rejected { errors } = outcome else {
+            panic!("the invalid case must reject the run");
+        };
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].file.ends_with("broken.yaml"),
+            "got: {:?}",
+            errors[0].file
+        );
     }
 }

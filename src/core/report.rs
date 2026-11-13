@@ -117,6 +117,14 @@ pub struct CaseReport {
     pub file: PathBuf,
     /// Case name.
     pub name: String,
+    /// Project the case declares.
+    pub project: Option<String>,
+    /// Suite the case declares.
+    pub suite: Option<String>,
+    /// Layer the case declares.
+    pub layer: Option<String>,
+    /// Tags the case declares.
+    pub tags: Vec<String>,
     /// Case state.
     pub status: CaseStatus,
     /// How long the case took.
@@ -134,6 +142,8 @@ pub struct CaseReport {
 pub struct RunReport {
     /// Case reports in execution order.
     pub cases: Vec<CaseReport>,
+    /// Cases that the filters excluded from this run.
+    pub filtered: usize,
     /// How long the run took.
     pub duration: Duration,
     /// Failure bundles that could not be written.
@@ -148,6 +158,8 @@ pub struct RunReport {
 pub struct Summary {
     /// Number of cases.
     pub cases: usize,
+    /// Cases that the filters excluded from this run.
+    pub filtered: usize,
     /// Cases that passed.
     pub cases_passed: usize,
     /// Cases that failed an assertion.
@@ -171,6 +183,7 @@ impl RunReport {
     pub fn summary(&self) -> Summary {
         let mut summary = Summary {
             cases: self.cases.len(),
+            filtered: self.filtered,
             ..Summary::default()
         };
         for case in &self.cases {
@@ -216,7 +229,12 @@ pub enum RunOutcome {
         /// One entry per invalid case file.
         errors: Vec<CaseError>,
     },
-    /// Every case ran.
+    /// Nothing ran because the filters selected no case.
+    NoMatch {
+        /// Names the filters and the values the discovered cases use.
+        message: String,
+    },
+    /// Every selected case ran.
     Completed(RunReport),
 }
 
@@ -226,8 +244,10 @@ impl RunOutcome {
     /// When several problems occur in one run the most fundamental one wins:
     /// invalid input, then environment, then timeout, then a failed assertion.
     pub fn exit_code(&self) -> ExitCode {
-        let RunOutcome::Completed(report) = self else {
-            return ExitCode::InvalidCase;
+        let report = match self {
+            Self::Rejected { .. } => return ExitCode::InvalidCase,
+            Self::NoMatch { .. } => return ExitCode::Usage,
+            Self::Completed(report) => report,
         };
         let kinds = report.problem_kinds();
         if kinds.contains(&ProblemKind::InvalidInput) {
@@ -260,6 +280,10 @@ mod tests {
             cases: vec![CaseReport {
                 file: PathBuf::from("case.yaml"),
                 name: "case".to_string(),
+                project: None,
+                suite: None,
+                layer: None,
+                tags: Vec::new(),
                 status: CaseStatus::Error,
                 duration: Duration::ZERO,
                 steps: vec![StepReport {
@@ -279,6 +303,7 @@ mod tests {
                 }),
                 bundle: None,
             }],
+            filtered: 0,
             duration: Duration::ZERO,
             bundle_errors: Vec::new(),
         }
@@ -330,10 +355,32 @@ mod tests {
     fn an_empty_report_is_a_success() {
         let report = RunReport {
             cases: Vec::new(),
+            filtered: 0,
             duration: Duration::ZERO,
             bundle_errors: Vec::new(),
         };
 
         assert_eq!(RunOutcome::Completed(report).exit_code(), ExitCode::Success);
+    }
+
+    #[test]
+    fn filters_that_match_nothing_are_a_usage_error() {
+        let outcome = RunOutcome::NoMatch {
+            message: "no case matched --tag \"smoke\"".to_string(),
+        };
+
+        assert_eq!(outcome.exit_code(), ExitCode::Usage);
+        assert!(!outcome.is_ok());
+    }
+
+    #[test]
+    fn the_summary_carries_the_filtered_count() {
+        let mut report = report_with(ProblemKind::Assertion);
+        report.filtered = 3;
+
+        let summary = report.summary();
+
+        assert_eq!(summary.filtered, 3);
+        assert_eq!(summary.cases, 1, "filtered cases are not run cases");
     }
 }

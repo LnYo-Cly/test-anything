@@ -1,0 +1,12 @@
+name: Filter fixture CLI
+project: shop
+suite: smoke
+layer: cli
+tags: [smoke]
+steps:
+  - cli.run:
+      command: ${ta}
+      args: ["--version"]
+    expect:
+      - path: $.exit_code
+        equals: 0

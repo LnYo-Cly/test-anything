@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use test_anything::core::bundle::{self, FailureBundles};
 use test_anything::core::case::{self, CaseError, LoadedCase};
 use test_anything::core::events::EventBus;
+use test_anything::core::filter::Filters;
 use test_anything::core::output::{self, Format};
 use test_anything::core::registry::Registry;
 use test_anything::core::report::RunOutcome;
@@ -54,6 +55,21 @@ enum Command {
         /// Overrides a case variable. Repeat for more than one.
         #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
         vars: Vec<(String, String)>,
+        /// Only runs cases in one of these projects. Repeat for more than one.
+        #[arg(long = "project", value_name = "NAME")]
+        projects: Vec<String>,
+        /// Only runs cases in one of these suites. Repeat for more than one.
+        #[arg(long = "suite", value_name = "NAME")]
+        suites: Vec<String>,
+        /// Only runs cases in one of these layers. Repeat for more than one.
+        #[arg(long = "layer", value_name = "NAME")]
+        layers: Vec<String>,
+        /// Only runs cases that have one of these tags. Repeat for more than one.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        /// Skips cases that have any of these tags. Repeat for more than one.
+        #[arg(long = "skip-tag", value_name = "TAG")]
+        skip_tags: Vec<String>,
         /// Directory that receives one subdirectory per failed case.
         #[arg(long, value_name = "DIRECTORY")]
         bundle_dir: Option<PathBuf>,
@@ -100,9 +116,25 @@ fn main() -> ExitCode {
         Command::Run {
             paths,
             vars,
+            projects,
+            suites,
+            layers,
+            tags,
+            skip_tags,
             bundle_dir,
             no_bundle,
-        } => run(&paths, cli.output, &registry, &vars, bundle_dir, no_bundle),
+        } => {
+            let filters = Filters {
+                project: projects,
+                suite: suites,
+                layer: layers,
+                tag: tags,
+                skip_tag: skip_tags,
+            };
+            run(
+                &paths, cli.output, &registry, &vars, &filters, bundle_dir, no_bundle,
+            )
+        }
         Command::Lint { paths, vars } => lint(&paths, cli.output, &registry, &vars),
         Command::Schema => print_schema(&registry, cli.output),
     }
@@ -113,10 +145,11 @@ fn run(
     format: OutputFormat,
     registry: &Registry,
     vars: &[(String, String)],
+    filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
 ) -> ExitCode {
-    let outcome = execute(paths, registry, vars, bundle_dir, no_bundle);
+    let outcome = execute(paths, registry, vars, filters, bundle_dir, no_bundle);
     let rendered = output::render(&outcome, format.into());
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
@@ -130,6 +163,7 @@ fn execute(
     paths: &[PathBuf],
     registry: &Registry,
     vars: &[(String, String)],
+    filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
 ) -> RunOutcome {
@@ -147,7 +181,7 @@ fn execute(
     };
 
     let bus = EventBus::new();
-    runner::run(&cases, registry, &bus, bundles.as_mut())
+    runner::run(&cases, registry, &bus, bundles.as_mut(), filters)
 }
 
 /// Validates the cases without running them.
@@ -173,6 +207,7 @@ fn lint(
     let report = output::LintReport {
         files: files.len(),
         errors,
+        cases: cases.iter().map(output::LintCase::new).collect(),
     };
     let rendered = output::render_lint(&report, format.into());
     let _ = write_stdout(&rendered.stdout);
