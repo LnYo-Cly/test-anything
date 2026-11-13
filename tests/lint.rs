@@ -59,7 +59,6 @@ fn json_stdout(output: &Output) -> Value {
 }
 
 /// The `(file, message)` pairs of a lint or run JSON report.
-#[cfg(feature = "cli")]
 fn error_pairs(value: &Value) -> Vec<(String, String)> {
     value["errors"]
         .as_array()
@@ -78,6 +77,140 @@ fn error_pairs(value: &Value) -> Vec<(String, String)> {
             )
         })
         .collect()
+}
+
+/// The typical structural mistakes of a case file: a file name, the file text
+/// and the line and column its error must name.
+///
+/// A new structural check adds an entry here; the guard test below is what
+/// keeps a case error from losing its source location.
+fn structural_mistakes() -> Vec<(&'static str, &'static str, u64, u64)> {
+    vec![
+        (
+            "unknown-assertion-field.yaml",
+            "name: Equal typo\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - path: $.exit_code\n        equal: 0\n",
+            6,
+            9,
+        ),
+        (
+            "missing-path.yaml",
+            "name: Missing path\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - equals: 0\n",
+            6,
+            9,
+        ),
+        (
+            "two-comparisons.yaml",
+            "name: Two comparisons\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - path: $.exit_code\n        equals: 0\n        contains: '0'\n",
+            6,
+            9,
+        ),
+        (
+            "two-actions.yaml",
+            "name: Two actions\nsteps:\n  - cli.run:\n      command: ta\n    other.step: {}\n",
+            3,
+            5,
+        ),
+        (
+            "save-not-a-string.yaml",
+            "name: Save not a string\nsteps:\n  - cli.run:\n      command: ta\n    save:\n      code: 3\n",
+            6,
+            13,
+        ),
+        (
+            "unknown-top-level-field.yaml",
+            "name: Unknown field\nnaem: typo\nsteps:\n  - cli.run:\n      command: ta\n",
+            2,
+            1,
+        ),
+        (
+            "syntax.yaml",
+            "name: Broken\nsteps:\n  - cli.run: [\n",
+            3,
+            14,
+        ),
+    ]
+}
+
+/// The guard against a case error without a source location.
+///
+/// Every structural mistake, the unknown top-level field and a grammar error
+/// must name its line and column in text and in JSON, and keep the source
+/// snippet that makes the location readable.
+#[test]
+fn every_case_error_names_its_line_and_column() {
+    for (name, text, line, column) in structural_mistakes() {
+        let dir = TempDir::new("lint-location");
+        let case = dir.write(name, text);
+        let location = format!("line {line} column {column}");
+
+        let output = run_ta(&["lint", path_str(&case)]);
+        assert_eq!(
+            exit_code(&output),
+            Some(3),
+            "{name}: stderr: {:?}",
+            stderr(&output)
+        );
+        let text_out = stdout(&output);
+        assert!(
+            text_out.contains(&location),
+            "{name}: the text error must name {location}, got: {text_out:?}"
+        );
+        assert!(
+            text_out
+                .lines()
+                .any(|line| line.contains('|') && line.contains('^')),
+            "{name}: the text error must keep the snippet caret, got: {text_out:?}"
+        );
+
+        let json = run_ta(&["--output", "json", "lint", path_str(&case)]);
+        let value = json_stdout(&json);
+        let message = value["errors"][0]["message"]
+            .as_str()
+            .expect("every error has a message");
+        assert!(
+            message.contains(&location),
+            "{name}: the JSON message must name {location}, got: {message:?}"
+        );
+        assert!(
+            message.contains('^'),
+            "{name}: the JSON message must keep the snippet caret, got: {message:?}"
+        );
+    }
+}
+
+/// `ta run` rejects an invalid case through the same path as `ta lint`, so an
+/// agent sees the same located message whichever command it used.
+#[test]
+fn run_and_lint_report_the_same_located_errors() {
+    let dir = TempDir::new("lint-run-locations");
+    for (name, text, _, _) in structural_mistakes() {
+        dir.write(name, text);
+    }
+
+    let run = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(dir.path()),
+        "--no-bundle",
+    ]);
+    let lint = run_ta(&["--output", "json", "lint", path_str(dir.path())]);
+
+    assert_eq!(exit_code(&run), Some(3), "stderr: {:?}", stderr(&run));
+    assert_eq!(exit_code(&lint), Some(3));
+    let pairs = error_pairs(&json_stdout(&lint));
+    assert_eq!(pairs.len(), structural_mistakes().len(), "got: {pairs:?}");
+    assert_eq!(
+        error_pairs(&json_stdout(&run)),
+        pairs,
+        "run must report the same located errors as lint"
+    );
+    for (file, message) in pairs {
+        assert!(
+            message.contains("line ") && message.contains("column "),
+            "{file}: every case error must name its position, got: {message:?}"
+        );
+    }
 }
 
 #[cfg(feature = "cli")]
