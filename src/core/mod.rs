@@ -13,3 +13,4 @@ pub mod output;
 pub mod registry;
 pub mod report;
 pub mod runner;
+pub mod schema;

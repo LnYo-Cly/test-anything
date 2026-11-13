@@ -2,13 +2,22 @@
 
 mod support;
 
+#[cfg(feature = "cli")]
 use std::fs;
+#[cfg(feature = "http")]
 use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::path::Path;
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
+#[cfg(feature = "http")]
+use std::process::Stdio;
+use std::process::{Command, Output};
 
+#[cfg(any(feature = "http", feature = "cli"))]
 use serde_json::Value;
-use support::{TempDir, TestServer, closed_port};
+use support::TempDir;
+#[cfg(feature = "http")]
+use support::{TestServer, closed_port};
 
 /// The binary under test, as an absolute path.
 fn ta() -> &'static str {
@@ -50,6 +59,7 @@ fn path_str(path: &Path) -> &str {
     path.to_str().expect("test paths must be valid UTF-8")
 }
 
+#[cfg(any(feature = "http", feature = "cli"))]
 fn json_stdout(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout must contain exactly one JSON value")
 }
@@ -67,41 +77,6 @@ fn version_prints_the_package_version() {
 }
 
 #[test]
-fn lint_still_reports_not_implemented() {
-    let output = run_ta(&["lint", "some.yaml"]);
-
-    assert_eq!(exit_code(&output), Some(9));
-    assert!(
-        output.stdout.is_empty(),
-        "standard output must stay clean in text mode, got: {:?}",
-        stdout(&output)
-    );
-    assert!(
-        stderr(&output).contains("not implemented"),
-        "expected a human-readable message on stderr, got: {:?}",
-        stderr(&output)
-    );
-}
-
-#[test]
-fn json_output_for_lint_is_a_single_error_object() {
-    let output = run_ta(&["--output", "json", "lint", "some.yaml"]);
-
-    assert_eq!(exit_code(&output), Some(9));
-    let value = json_stdout(&output);
-
-    assert!(value.is_object(), "expected a JSON object, got: {value}");
-    assert_eq!(value["ok"], Value::Bool(false));
-    assert_eq!(value["error"]["code"], "not_implemented");
-    assert!(
-        value["error"]["message"]
-            .as_str()
-            .is_some_and(|message| !message.is_empty()),
-        "expected a non-empty error message, got: {value}"
-    );
-}
-
-#[test]
 fn unknown_subcommand_is_a_usage_error() {
     let output = run_ta(&["nosuch"]);
 
@@ -109,6 +84,7 @@ fn unknown_subcommand_is_a_usage_error() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_case_that_passes_exits_zero_and_saves_variables() {
     let server = TestServer::start();
     let dir = TempDir::new("passing");
@@ -172,6 +148,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_failed_assertion_exits_one_and_reports_path_expected_and_actual() {
     let server = TestServer::start();
     let dir = TempDir::new("failing");
@@ -216,6 +193,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn json_output_describes_cases_steps_and_assertions() {
     let server = TestServer::start();
     let dir = TempDir::new("json");
@@ -278,6 +256,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_unreachable_target_exits_four() {
     let port = closed_port();
     let dir = TempDir::new("unreachable");
@@ -304,6 +283,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_step_that_exceeds_its_timeout_exits_five() {
     let server = TestServer::start();
     let dir = TempDir::new("timeout");
@@ -354,6 +334,7 @@ fn an_unknown_field_exits_three_with_a_line_number() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_unregistered_step_exits_three() {
     let dir = TempDir::new("unregistered");
     let case = dir.write(
@@ -376,6 +357,7 @@ fn an_unregistered_step_exits_three() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn arguments_that_do_not_match_the_schema_exit_three() {
     let dir = TempDir::new("bad-args");
     let case = dir.write(
@@ -394,6 +376,7 @@ fn arguments_that_do_not_match_the_schema_exit_three() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_undefined_variable_exits_three() {
     let dir = TempDir::new("undefined-var");
     let case = dir.write(
@@ -412,6 +395,7 @@ fn an_undefined_variable_exits_three() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn an_invalid_case_prevents_every_other_case_from_running() {
     let server = TestServer::start();
     let dir = TempDir::new("rejected");
@@ -443,6 +427,7 @@ fn an_invalid_case_prevents_every_other_case_from_running() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_directory_is_scanned_recursively_in_path_order() {
     let server = TestServer::start();
     let dir = TempDir::new("directory");
@@ -473,6 +458,7 @@ fn a_directory_is_scanned_recursively_in_path_order() {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_failed_step_stops_its_case_but_not_the_other_cases() {
     let server = TestServer::start();
     let dir = TempDir::new("stop-on-failure");
@@ -524,6 +510,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn every_comparison_passes_when_the_result_matches() {
     let server = TestServer::start();
     let dir = TempDir::new("comparisons");
@@ -562,6 +549,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn query_headers_and_json_bodies_reach_the_server() {
     let server = TestServer::start();
     let dir = TempDir::new("echo");
@@ -606,6 +594,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_non_success_status_is_part_of_the_result() {
     let server = TestServer::start();
     let dir = TempDir::new("status");
@@ -633,6 +622,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_text_body_is_a_string() {
     let server = TestServer::start();
     let dir = TempDir::new("text");
@@ -673,6 +663,7 @@ fn a_missing_case_file_exits_three() {
 ///
 /// The tests below write far more than a pipe buffer, so closing after the
 /// first chunk makes the next write in the child fail with a broken pipe.
+#[cfg(feature = "http")]
 fn close_after_first_read(mut pipe: impl Read) {
     let mut buffer = [0_u8; 64];
     let read = pipe.read(&mut buffer).expect("failed to read the pipe");
@@ -680,6 +671,7 @@ fn close_after_first_read(mut pipe: impl Read) {
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_closed_stdout_pipe_does_not_panic_and_keeps_the_run_exit_code() {
     let server = TestServer::start();
     let dir = TempDir::new("broken-stdout");
@@ -729,6 +721,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "http")]
 fn a_closed_stderr_pipe_does_not_panic_and_keeps_the_invalid_case_exit_code() {
     let dir = TempDir::new("broken-stderr");
     // The error message echoes the invalid JSON path, so standard error is far
@@ -779,6 +772,7 @@ steps:
 ///
 /// The program under test is `ta` itself: the failure paths must not depend on
 /// a system command such as `false` or `exit`, which differ across platforms.
+#[cfg(feature = "cli")]
 fn wrong_expectation_case(name: &str) -> String {
     format!(
         r#"
@@ -796,6 +790,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_cli_step_reports_exit_code_stdout_stderr_and_parsed_json() {
     let dir = TempDir::new("cli-step");
     let case = dir.write(
@@ -841,6 +836,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_cli_step_runs_in_the_requested_working_directory() {
     let dir = TempDir::new("cli-cwd");
     dir.write(
@@ -877,6 +873,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_missing_program_exits_four_and_names_it() {
     let dir = TempDir::new("cli-missing");
     let case = dir.write(
@@ -895,6 +892,7 @@ fn a_missing_program_exits_four_and_names_it() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_cli_step_with_invalid_arguments_exits_three() {
     let dir = TempDir::new("cli-invalid-args");
     let unknown = dir.write(
@@ -931,6 +929,7 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_cli_step_that_exceeds_its_timeout_exits_five() {
     let server = TestServer::start();
     let dir = TempDir::new("cli-timeout");
@@ -970,6 +969,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_cli_step_reads_more_output_than_a_pipe_buffer() {
     let dir = TempDir::new("cli-big-output");
     // Far more than the 64 KiB a pipe holds, so a reader that waits for the
@@ -1019,6 +1019,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_failing_case_writes_a_complete_bundle() {
     let dir = TempDir::new("bundle");
     let case = dir.write("failing.yaml", &wrong_expectation_case("Wrong exit code"));
@@ -1098,6 +1099,7 @@ fn a_failing_case_writes_a_complete_bundle() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_passing_run_creates_no_bundle_directory() {
     let dir = TempDir::new("bundle-passing");
     let case = dir.write(
@@ -1128,6 +1130,7 @@ fn a_passing_run_creates_no_bundle_directory() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn no_bundle_turns_the_failure_bundle_off() {
     let dir = TempDir::new("bundle-off");
     let case = dir.write("failing.yaml", &wrong_expectation_case("No bundle"));
@@ -1147,6 +1150,7 @@ fn no_bundle_turns_the_failure_bundle_off() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_bundle_that_cannot_be_written_keeps_the_exit_code_and_is_reported() {
     let dir = TempDir::new("bundle-blocked");
     let case = dir.write("failing.yaml", &wrong_expectation_case("Blocked bundle"));
@@ -1185,6 +1189,7 @@ fn a_bundle_that_cannot_be_written_keeps_the_exit_code_and_is_reported() {
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn var_overrides_a_variable_from_the_case_file() {
     let dir = TempDir::new("var");
     let inner = dir.write(
@@ -1231,6 +1236,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn var_can_define_a_variable_the_case_file_does_not() {
     let dir = TempDir::new("var-new");
     let inner = dir.write(
@@ -1275,6 +1281,7 @@ steps:
 }
 
 #[test]
+#[cfg(feature = "cli")]
 fn a_malformed_var_exits_two_with_the_expected_form() {
     let dir = TempDir::new("var-malformed");
     let case = dir.write(

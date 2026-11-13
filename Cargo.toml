@@ -35,3 +35,6 @@ unsafe_code = "forbid"
 # fallible helpers so the run keeps its own exit code.
 print_stdout = "deny"
 print_stderr = "deny"
+
+[dev-dependencies]
+jsonschema = { version = "0.61", default-features = false }
