@@ -12,6 +12,7 @@ The complete reference for `ta`: installation options, building from source, the
   - [The service under test](#the-service-under-test)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
+  - [Secrets](#secrets)
   - [Schema](#schema)
 - [Case files](#case-files)
   - [Variables](#variables)
@@ -113,6 +114,7 @@ failure bundle under `.ta/failures`, which git ignores; add
 ta run cases/login.yaml
 ta run cases/
 ta run cases/ --var token=abc --var user=alice
+ta run cases/ --vars-file envs/local.yaml --vars-file envs/ci.yaml
 ta run cases/ --layer api --tag smoke
 ta run cases/ --tag smoke --skip-tag slow
 ta run cases/ --bundle-dir /tmp/ta-failures
@@ -120,6 +122,7 @@ ta run cases/ --no-bundle
 ta --output json run cases/
 ta lint cases/
 ta lint cases/ --var token=abc
+ta lint cases/ --vars-file envs/ci.yaml
 ta --output json lint cases/
 ta schema
 ta --output json schema > ta-case.schema.json
@@ -135,6 +138,38 @@ still run.
 `--var name=value` defines a variable for every case of the run and may be
 repeated. It overrides a variable of the same name in the case's `vars:`. A
 `--var` without `=` or with an empty name is a usage error (exit 2).
+
+`--vars-file <file>` reads variables from a YAML mapping and may be repeated.
+The keys are variable names; the values are strings, numbers or booleans, the
+same way `vars:` reads them, so `port: 8080` becomes the text `8080`. A file is
+applied in the order it appears on the command line, and a later source
+overrides an earlier one: a case's `vars:`, then each `--vars-file`, then
+`--var`. A file that does not exist, is not a mapping, or holds a value that is
+not a string, number or boolean is a usage error (exit 2) that names the file
+and, where the parser knows it, the line and column:
+
+```yaml
+# envs/staging.yaml
+base: https://staging.example.test
+user: alice
+retries: 3
+```
+
+```sh
+ta run cases/ --vars-file envs/staging.yaml
+```
+
+Use it to run one set of cases against a local server, a staging deployment and
+CI without editing the case files:
+
+```sh
+ta run cases/ --vars-file envs/local.yaml
+ta run cases/ --vars-file envs/staging.yaml
+ta run cases/ --vars-file envs/ci.yaml --var base=http://127.0.0.1:8080
+```
+
+`ta lint` accepts `--vars-file` and `--var` as well, and validates the cases
+with the same values a run would use.
 
 `--bundle-dir <directory>` changes where failure bundles are written (see
 [Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
@@ -228,11 +263,11 @@ Filtered-out cases do not appear in the result; the summary counts them as
 ### Linting
 
 `ta lint` takes the same files and directories as `ta run`, and the same
-`--var name=value`. It discovers, loads and validates every case with the same
-preflight that `ta run` uses, but it does not execute a step, write a failure
-bundle or emit run events. A case that lint accepts is a case that `ta run`
-accepts before it starts; problems that only appear while a step runs, such as
-an unreachable target, are outside lint's scope.
+`--var name=value` and `--vars-file` options. It discovers, loads and validates
+every case with the same preflight that `ta run` uses, but it does not execute a
+step, write a failure bundle or emit run events. A case that lint accepts is a
+case that `ta run` accepts before it starts; problems that only appear while a
+step runs, such as an unreachable target, are outside lint's scope.
 
 Unlike a run, lint reports every problem in every file instead of stopping at
 the first one. Text output writes `file: message` for each problem and ends with
@@ -304,6 +339,55 @@ The exit code is 0 when every case is valid and 3 when anything is invalid,
 including a path that cannot be read and a directory with no case files. Use
 `ta lint tests/self --var ta=target/debug/ta` to check the self suite without
 running it.
+
+### Secrets
+
+A value that `ta` read through `${env:NAME}` is treated as a secret. The rule
+follows the source, not a declaration: nothing has to be marked, so a value
+cannot be forgotten. Values from `vars:`, `--vars-file` and `--var` are not
+secrets and stay readable, because they are already visible in a file or in the
+command line.
+
+Before anything is written, every occurrence of every secret is replaced with
+`***`. That covers:
+
+- text output on standard output and standard error, including the actual value
+  of a failed assertion and the message of a step error;
+- `--output json`, as one object with the same replacement inside strings,
+  object keys and numbers;
+- the `report.json` and `meta.json` of every failure bundle;
+- every error message, including one produced before a case runs, such as a
+  rejected step argument.
+
+The replacement happens in the two places where `ta` writes results — the
+renderer and the bundle writer — not in each driver, so a new driver or reporter
+cannot bypass it. A failure bundle keeps the copy of the case file as written:
+it holds `${env:NAME}` references and no values.
+
+```console
+$ export TA_TOKEN=s3cr3t-token
+$ ta run cases/
+FAIL cases/login.yaml [Login returns a token] 6 ms
+  http.request: 1 of 2 assertions failed
+    $.body.token equals "t-123" (actual "***")
+  bundle: .ta/failures/1763000000123-4242/0-login-returns-a-token
+Summary: 1 case (0 passed, 1 failed, 0 errors, 0 filtered), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 7 ms
+```
+
+Redaction has limits that matter when you choose a value:
+
+- **Short secrets hide unrelated text.** A secret of `1` replaces every `1` in
+  the output, including digits of a status code or a duration. Use a value that
+  is long enough to be distinctive.
+- **Encoded secrets are not recognized.** If a program base64-encodes,
+  URL-encodes or otherwise transforms the value, the result no longer matches
+  and appears as it is. The same holds for a value a program splits or
+  reassembles.
+- **A number is redacted as a string.** When a secret looks like a number and a
+  service echoes it back as a JSON number, the JSON output shows the string
+  `"***"` there, so the type of that one value changes in the report.
+- **Only the value is secret.** The name of the variable and the fact that it is
+  set are not.
 
 ### Schema
 
@@ -390,7 +474,38 @@ as `${name}`. Substitution is textual and only happens inside strings, so a
 variable may not change the type of a value. Referencing a variable that is
 neither in `vars:` nor saved by an earlier step is a case error. `--var
 name=value` on the command line defines a variable for every case and overrides
-the same name in `vars:`.
+the same name in `vars:`; `--vars-file` supplies a whole set of them (see
+[Usage](#usage)).
+
+`${env:NAME}` reads the process environment instead of a variable. It works in
+a step argument, in a `vars:` value and in a `--vars-file` value, so a
+connection string or a token can stay out of the case file:
+
+```yaml
+vars:
+  base: "${env:TA_BASE_URL}"
+steps:
+  - http.request:
+      url: "${base}/health"
+      headers: { Authorization: "Bearer ${env:TA_TOKEN}" }
+    expect:
+      - path: $.status
+        equals: 200
+```
+
+- The name must start with a letter or `_` and continue with letters, digits or
+  `_`. An empty name or any other character is a case error (exit 3).
+- A name that is not set in the environment is a case error (exit 3) whose
+  message names it and says to set it before running. `ta lint` reports the same
+  error, so a run that would fail this way never starts.
+- A name set to an empty string counts as set and expands to nothing.
+- There is no default-value syntax such as `${env:NAME:-fallback}`; a missing
+  value is always an error, so a typo cannot silently use a fallback.
+- Only `${env:NAME}` is expanded inside a variable's value. A `${name}`
+  reference there stays as written, because only a step argument can resolve it.
+
+A value read from the environment is a **secret**, and `ta` replaces it with
+`***` in everything it writes. See [Secrets](#secrets).
 
 ### Assertions
 
@@ -521,9 +636,11 @@ A run where every case passes creates nothing. When a bundle cannot be written,
 the exit code of the run does not change: the problem is reported on standard
 error and in the `bundle_errors` list of `--output json`.
 
-> A bundle contains the arguments and results of every step, which may include
-> credentials. Keep the bundle directory out of version control; `.ta/` is in
-> this repository's `.gitignore`.
+> A bundle contains the arguments and results of every step. Values that came
+> from `${env:NAME}` are replaced with `***`, but a credential that was written
+> into a case file, a `--vars-file` or a `--var` value is not: treat a bundle as
+> sensitive and keep its directory out of version control; `.ta/` is in this
+> repository's `.gitignore`.
 
 ## Output
 
@@ -603,6 +720,10 @@ Every path that `ta` prints, in text output, in JSON and in a failure bundle,
 uses `/` as the separator on every platform, so a path from the output can be
 copied back unchanged.
 
+A value that `ta` read through `${env:NAME}` appears as `***` in both formats
+and in a bundle; see [Secrets](#secrets) for what that covers and where it
+stops.
+
 ### Capturing JSON on Windows
 
 `ta` writes UTF-8 to standard output, and the shell can re-encode it on the way
@@ -643,7 +764,7 @@ Diagnostics never go to standard output.
 | 0 | Every case ran and passed |
 | 1 | At least one case failed an assertion or could not finish a step |
 | 2 | Command-line usage error, including filters that select no case |
-| 3 | Invalid case file, invalid step arguments, unknown step or undefined variable |
+| 3 | Invalid case file, invalid step arguments, unknown step, undefined variable or an unset `${env:NAME}` |
 | 4 | Environment error (for example an unreachable target) |
 | 5 | Timeout |
 | 9 | Reserved for a feature that is not implemented; no current command returns it |
