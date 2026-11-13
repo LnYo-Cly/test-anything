@@ -50,6 +50,7 @@ jobs:
           - { target: x86_64-apple-darwin, os: macos-15-intel }
           - { target: aarch64-apple-darwin, os: macos-latest }
           - { target: x86_64-pc-windows-msvc, os: windows-latest, exe: .exe }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-arm, exe: .exe }
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       TARGET: ${{ matrix.target }}
