@@ -95,14 +95,14 @@ fn text_lint(report: &LintReport) -> Rendered {
     let mut stdout = String::new();
     for error in &report.errors {
         // The parser's message carries a source snippet with its own line
-        // breaks. Text mode promises one line per error, so collapse the
-        // layout while keeping every word; JSON keeps the exact message.
-        let message = error
-            .message
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        stdout.push_str(&format!("{}: {message}\n", paths::display(&error.file)));
+        // breaks. Text output keeps it as written: the caret line is what makes
+        // the reported location readable, and every error still starts with its
+        // file name at the beginning of a line.
+        stdout.push_str(&format!(
+            "{}: {}\n",
+            paths::display(&error.file),
+            error.message
+        ));
     }
     stdout.push_str(&format!(
         "Checked {} {}: {} {}.\n",
@@ -677,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_text_keeps_a_multiline_parser_message_on_one_line() {
+    fn lint_text_keeps_the_line_breaks_of_a_parser_message() {
         let report = LintReport {
             files: 1,
             errors: vec![CaseError {
@@ -691,7 +691,7 @@ mod tests {
 
         assert_eq!(
             rendered.stdout,
-            "broken.yaml: line 2 column 3: unclosed bracket --> <input> |\nChecked 1 file: 1 error.\n"
+            "broken.yaml: line 2 column 3: unclosed bracket\n --> <input>\n  |\nChecked 1 file: 1 error.\n"
         );
     }
 

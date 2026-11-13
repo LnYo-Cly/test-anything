@@ -327,6 +327,10 @@ fn an_unknown_field_exits_three_with_a_line_number() {
         "expected a line number, got: {stderr:?}"
     );
     assert!(
+        stderr.lines().any(|line| line.contains('^')),
+        "the parser snippet must keep its caret line, got: {stderr:?}"
+    );
+    assert!(
         output.stdout.is_empty(),
         "nothing should be reported as a result, got: {:?}",
         stdout(&output)

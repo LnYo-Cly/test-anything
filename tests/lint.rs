@@ -117,10 +117,28 @@ fn a_syntax_error_exits_three_and_reports_its_location() {
         stdout.contains("broken.yaml"),
         "the message must name the file, got: {stdout:?}"
     );
+    // The parser shows the source line under the error. Lint keeps that
+    // snippet as the parser wrote it, because a caret line is what makes the
+    // location readable.
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines.len() > 2,
+        "the snippet must keep its line breaks, got: {stdout:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains('^')),
+        "the snippet must keep the caret line, got: {stdout:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_end().ends_with("- cli.run: [")),
+        "the snippet must keep the source line on its own line, got: {stdout:?}"
+    );
     assert_eq!(
-        stdout.lines().count(),
-        2,
-        "one error line and one summary line, got: {stdout:?}"
+        lines.last().copied(),
+        Some("Checked 1 file: 1 error."),
+        "the summary must stay the last line, got: {stdout:?}"
     );
 }
 

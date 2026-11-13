@@ -210,12 +210,17 @@ accepts before it starts; problems that only appear while a step runs, such as
 an unreachable target, are outside lint's scope.
 
 Unlike a run, lint reports every problem in every file instead of stopping at
-the first one. Text output writes one line per problem as `file: message` and
-ends with a summary:
+the first one. Text output writes `file: message` for each problem and ends with
+a summary. A YAML grammar error keeps the parser's source snippet, including its
+line breaks and caret line, so the reported location can be read directly:
 
 ```text
 cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
-cases/logout.yaml: line 4: unknown field `naem`
+cases/logout.yaml: line 4 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+ --> <input>:4:1
+  |
+4 | naem: typo
+  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
 Checked 2 files: 2 errors.
 ```
 
