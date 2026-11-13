@@ -9,6 +9,7 @@ The complete reference for `ta`: installation options, building from source, the
 - [Test](#test)
   - [Self-test suite](#self-test-suite)
 - [Usage](#usage)
+  - [The service under test](#the-service-under-test)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
   - [Schema](#schema)
@@ -138,6 +139,30 @@ repeated. It overrides a variable of the same name in the case's `vars:`. A
 `--bundle-dir <directory>` changes where failure bundles are written (see
 [Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
 
+### The service under test
+
+A case talks to a service that is already running: `ta` sends the requests and
+starts the programs a step names, but it never starts, restarts or stops the
+service itself. Running a case against a server therefore takes four steps of
+your own shell:
+
+1. Start the service, in its own terminal or as a background process.
+2. Wait until it accepts requests.
+3. Run the cases.
+4. Stop the service when the run is over. `ta` leaves it running.
+
+Pass the address with `--var` instead of writing a port into the case file, so
+the same cases run against a local server and a deployed environment:
+
+```sh
+ta run cases/ --var base=http://127.0.0.1:8080
+```
+
+A run that starts before the service is listening reports an environment error
+(exit 4) whose message names the connection failure, and no assertion is
+evaluated. That is how a wrong target is told apart from a wrong expectation: an
+unreachable service is never a failed assertion.
+
 ### Classification and filtering
 
 A case may describe where it belongs, so one repository can hold interface,
@@ -211,17 +236,39 @@ an unreachable target, are outside lint's scope.
 
 Unlike a run, lint reports every problem in every file instead of stopping at
 the first one. Text output writes `file: message` for each problem and ends with
-a summary. A YAML grammar error keeps the parser's source snippet, including its
-line breaks and caret line, so the reported location can be read directly:
+a summary. A YAML grammar error and every structural problem of a case file — a
+step, an assertion, a `save` entry or a variable — name the line and column of
+the node they belong to and keep the parser's source snippet, including its line
+breaks and caret line, so the reported location can be read directly:
+
+```text
+cases/login.yaml: line 6 column 9: step 1: assertion 1: unknown field(s) equal; use one of equals, not_equals, contains, exists
+ --> <input>:6:9
+  |
+4 |       command: ta
+5 |     expect:
+6 |       - path: $.exit_code
+  |         ^ step 1: assertion 1: unknown field(s) equal; use one of equals, not_equals, contains, exists
+7 |         equal: 0
+  |
+cases/logout.yaml: line 2 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+ --> <input>:2:1
+  |
+1 | name: Logout
+2 | naem: typo
+  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+3 | steps:
+4 |   - cli.run:
+  |
+Checked 2 files: 2 errors.
+```
+
+Problems that need the registry, such as an undefined variable or a step
+argument that does not match the step's schema, name the step instead, because
+the parser cannot know them:
 
 ```text
 cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
-cases/logout.yaml: line 4 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
- --> <input>:4:1
-  |
-4 | naem: typo
-  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
-Checked 2 files: 2 errors.
 ```
 
 `--output json` writes exactly one object:
@@ -480,6 +527,10 @@ error and in the `bundle_errors` list of `--output json`.
 
 ## Output
 
+`--output` is a global option, so it may stand before or after the subcommand:
+`ta --output json run cases/` and `ta run cases/ --output json` are the same
+command. The same holds for `lint` and `schema`.
+
 `--output text` (the default) writes one line per case to standard output, lists
 each failed assertion with its path, expected value and actual value, and ends
 with a summary line:
@@ -551,6 +602,33 @@ none), and `summary.filtered` counts the cases the filters excluded.
 Every path that `ta` prints, in text output, in JSON and in a failure bundle,
 uses `/` as the separator on every platform, so a path from the output can be
 copied back unchanged.
+
+### Capturing JSON on Windows
+
+`ta` writes UTF-8 to standard output, and the shell can re-encode it on the way
+to a file. Windows PowerShell 5.1, the `powershell.exe` that ships with Windows,
+writes the result of `>` as UTF-16LE, so the file does not start with the `{` of
+a JSON object and most tools refuse it:
+
+```powershell
+ta --output json run cases/ > out.json   # out.json starts with FF FE
+```
+
+Capture the bytes `ta` wrote with `cmd` instead, which keeps UTF-8 without a
+byte order mark and keeps the exit code of the run:
+
+```powershell
+cmd /c "ta --output json run cases/ > out.json"
+```
+
+`Set-Content -Encoding utf8` is no better in that version: it adds a byte order
+mark (`EF BB BF`) at the start of the file. Redirect with PowerShell itself and
+check the first bytes afterwards; `7B`, the `{` of the object, is what a usable
+JSON file starts with:
+
+```powershell
+Format-Hex -Path out.json | Select-Object -First 1
+```
 
 When no case can run, `cases` is empty and `errors` lists one entry per invalid
 file, with `file`, `message` and `kind`. When the filters select no case,

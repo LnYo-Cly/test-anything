@@ -105,6 +105,8 @@ $ echo $?
 
 失败的用例指出了哪条断言失败、实际值是什么，证据保存在 `.ta/failures/…` 中。加上 `--output json` 可得到单个 JSON 对象而不是文本。
 
+用例只对已经运行的程序或服务发起调用：`ta` 不负责启动、重启或停止它们。[被测服务](docs/guide.md#the-service-under-test)一节给出“先启动、再运行、最后停止”的模式，[在 Windows 上保存 JSON](docs/guide.md#capturing-json-on-windows)一节说明如何避免被 shell 重新编码。
+
 ## 现在能测什么
 
 | 步骤 | 测试对象 | 可断言的结果 |

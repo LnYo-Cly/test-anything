@@ -93,6 +93,8 @@ $ echo $?
 
 The failed case says which assertion failed and what the real value was, and its evidence is in `.ta/failures/…`. Add `--output json` for a single JSON object instead of text.
 
+A case talks to a program or service that is already running: `ta` never starts, restarts or stops it. [The service under test](docs/guide.md#the-service-under-test) shows the start–run–stop pattern, and [capturing JSON on Windows](docs/guide.md#capturing-json-on-windows) how to save the output without the shell re-encoding it.
+
 ## What you can test today
 
 | Step | Tests | Result you assert on |
