@@ -119,12 +119,14 @@ fn the_classification_fields_match_the_parser() {
     );
 
     for field in ["project", "suite", "layer"] {
-        let mut empty = instance.clone();
-        empty[field] = json!("");
-        assert!(
-            !validator.is_valid(&empty),
-            "the parser rejects an empty `{field}`, so the schema must too"
-        );
+        for blank in ["", "   "] {
+            let mut empty = instance.clone();
+            empty[field] = json!(blank);
+            assert!(
+                !validator.is_valid(&empty),
+                "the parser rejects a blank `{field}` ({blank:?}), so the schema must too"
+            );
+        }
     }
 
     let mut duplicate = instance.clone();
@@ -134,12 +136,14 @@ fn the_classification_fields_match_the_parser() {
         "the parser rejects a duplicate tag, so the schema must too"
     );
 
-    let mut empty_tag = instance.clone();
-    empty_tag["tags"] = json!([""]);
-    assert!(
-        !validator.is_valid(&empty_tag),
-        "the parser rejects an empty tag, so the schema must too"
-    );
+    for blank in ["", "   "] {
+        let mut empty_tag = instance.clone();
+        empty_tag["tags"] = json!([blank]);
+        assert!(
+            !validator.is_valid(&empty_tag),
+            "the parser rejects a blank tag ({blank:?}), so the schema must too"
+        );
+    }
 }
 
 #[cfg(feature = "cli")]

@@ -55,17 +55,17 @@ pub fn case_schema(registry: &Registry) -> Value {
             },
             "project": {
                 "type": "string",
-                "minLength": 1,
+                "pattern": "\\S",
                 "description": "Project the case belongs to. Select it with `--project`."
             },
             "suite": {
                 "type": "string",
-                "minLength": 1,
+                "pattern": "\\S",
                 "description": "Suite the case belongs to. Select it with `--suite`."
             },
             "layer": {
                 "type": "string",
-                "minLength": 1,
+                "pattern": "\\S",
                 "description": "Free-form layer of the case, for example `unit`, `api`, `cli`, `ui`, `integration`, `e2e` or `db`. Select it with `--layer`."
             },
             "tags": {
@@ -74,7 +74,7 @@ pub fn case_schema(registry: &Registry) -> Value {
                 "uniqueItems": true,
                 "items": {
                     "type": "string",
-                    "minLength": 1
+                    "pattern": "\\S"
                 }
             },
             "vars": {
@@ -232,12 +232,12 @@ mod tests {
 
         for field in ["project", "suite", "layer"] {
             assert_eq!(properties[field]["type"], "string", "{field}");
-            assert_eq!(properties[field]["minLength"], 1, "{field}");
+            assert_eq!(properties[field]["pattern"], "\\S", "{field}");
         }
         assert_eq!(properties["tags"]["type"], "array");
         assert_eq!(properties["tags"]["uniqueItems"], true);
         assert_eq!(properties["tags"]["items"]["type"], "string");
-        assert_eq!(properties["tags"]["items"]["minLength"], 1);
+        assert_eq!(properties["tags"]["items"]["pattern"], "\\S");
         assert!(
             schema["required"]
                 .as_array()
