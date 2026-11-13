@@ -1,380 +1,150 @@
+<div align="center">
+
 # test-anything
 
-An agent-friendly, cross-layer testing tool written in Rust.
+**One binary to test anything — built for coding agents and the people who work with them.**
 
-`ta` is a single binary that runs declarative test cases against HTTP APIs and
-command-line programs, and reports results in a form that both people and coding
-agents can read. Status: early development. `ta run` executes YAML cases with
-the built-in `http.request` and `cli.run` steps, writes a failure bundle when a
-case does not pass, and describes every run as text or JSON; `ta lint` and
-`ta schema` are not implemented yet and exit with code 9.
+Write a test as YAML, run it with `ta`, get a clear verdict, a precise exit code and machine-readable evidence.
+
+[![CI](https://github.com/LnYo-Cly/test-anything/actions/workflows/ci.yml/badge.svg)](https://github.com/LnYo-Cly/test-anything/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/LnYo-Cly/test-anything?sort=semver)](https://github.com/LnYo-Cly/test-anything/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)
+
+**English** · [简体中文](README.zh-CN.md)
+
+[Install](#install) · [Quick start](#quick-start) · [Guide](docs/guide.md) · [Roadmap](#roadmap) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+---
+
+## Why `ta`?
+
+- **One small static binary.** No runtime, no package manager, no browser download. Linux, macOS and Windows on x86_64 and Arm64.
+- **Made for agents.** Every run can be one JSON object, every outcome has its own exit code, and every failure leaves a bundle on disk that an agent can read after the terminal output is gone.
+- **Declarative cases.** Steps, assertions and variables in plain YAML that people can review and agents can write. Invalid cases are rejected before anything runs, with line and column.
+- **Cross-layer by design.** Actions start where a user or client starts them (an API, a command, later a UI); results are asserted with JSONPath on any step's output.
+- **Pluggable.** Built-in steps register through the same registry that external drivers will use. The core knows nothing about HTTP or processes.
+- **Tests itself.** The project's own self-test suite is written in `ta` and runs on every platform in CI.
 
 ## Install
 
-Linux and macOS:
+**Linux and macOS**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.sh | sh
 ```
 
-Windows (PowerShell):
+**Windows (PowerShell)**
 
 ```powershell
 irm https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.ps1 | iex
 ```
 
-The scripts pick the build for your system and CPU (x86_64 or Arm64), download the latest release, check it against `SHA256SUMS`, and install `ta` without administrator rights: to `~/.local/bin` on Linux and macOS, and to `%LOCALAPPDATA%\Programs\ta` on Windows, which is added to your user `PATH`. On Linux and macOS the script prints the line to add when the directory is not on `PATH` yet.
+The scripts pick the right build for your system and CPU, verify it against `SHA256SUMS`, and need no administrator rights. Mirror, version pinning and other options are in the [installation guide](docs/guide.md#installation); archives are also on the [Releases](https://github.com/LnYo-Cly/test-anything/releases) page.
 
-If `raw.githubusercontent.com` is slow or blocked on your network, fetch the same scripts from jsDelivr:
+## Quick start
 
-```sh
-curl -fsSL https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.sh | sh
-```
-
-```powershell
-irm https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.ps1 | iex
-```
-
-Options, set as environment variables:
-
-| Variable | Meaning |
-| --- | --- |
-| `TA_VERSION` | Release to install, for example `v0.2.0`. Default: the latest. |
-| `TA_INSTALL_DIR` | Directory that receives `ta`. |
-| `TA_DOWNLOAD_URL` | Base URL of a mirror or proxy that serves the release files as `<base>/<tag>/<file>`. The archive and `SHA256SUMS` both come from it, so use one you trust. Finding the latest release still contacts `github.com` unless `TA_VERSION` is set. |
-| `TA_NO_MODIFY_PATH` | Windows only: leave the user `PATH` unchanged. |
-
-You can also download an archive from [GitHub Releases](https://github.com/LnYo-Cly/test-anything/releases) yourself, extract it, and put `ta` on your `PATH`. Each release includes a `SHA256SUMS` file.
-
-## Build
-
-Requires Rust 1.89 or newer (edition 2024).
-
-```sh
-cargo build
-```
-
-The binary is written to `target/debug/ta` (`target\debug\ta.exe` on Windows).
-The `http` feature provides the `http.request` step and the `cli` feature
-provides the `cli.run` step; both are enabled by default. Build a subset with
-`--no-default-features --features cli`, or no driver at all with
-`--no-default-features`.
-
-## Test
-
-```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo clippy --all-targets --no-default-features -- -D warnings
-cargo test
-```
-
-The integration tests in `tests/cli.rs` run the compiled binary against a local
-HTTP server that each test starts itself. They never reach the network.
-
-### Self-test suite
-
-`tests/self/*.yaml` are cases that test `ta` with `ta`: every step is a
-`cli.run` that starts the binary under test. `tests/self_suite.rs` runs them with
-the compiled binary, so the existing `cargo test` covers them on Linux, macOS and
-Windows without a separate CI job:
-
-```sh
-cargo test --test self_suite
-ta run tests/self --var ta=target/debug/ta    # the same suite, by hand
-```
-
-`--var ta=<path>` tells every case which binary to start. The cases that the
-suite calls are fixtures in `tests/self/fixtures/`; they use the `.case`
-extension so that the recursive directory scan of `tests/self` does not pick
-them up as tests. Run one explicitly, `ta run tests/self/fixtures/passing.case`,
-to see what it does. The fixtures use `ta` itself as the program under test, so
-the suite needs neither the network nor a system command such as `echo` or
-`sleep`. One case runs a case that is meant to fail, so a manual run writes a
-failure bundle under `.ta/failures`, which git ignores; add
-`--var bundles=<directory>` to put it somewhere else.
-
-## Usage
-
-```sh
-ta run cases/login.yaml
-ta run cases/
-ta run cases/ --var token=abc --var user=alice
-ta run cases/ --bundle-dir /tmp/ta-failures
-ta run cases/ --no-bundle
-ta --output json run cases/
-ta lint cases/        # not implemented yet
-ta schema             # not implemented yet
-```
-
-`ta run` accepts files and directories. A directory is searched recursively for
-`.yaml` and `.yml` files, which are run in path order. Every case file and every
-step is validated before the first case runs: if anything is invalid, no case
-runs and the exit code is 3. A step that fails an assertion stops its own case;
-the remaining steps of that case are reported as skipped and the other cases
-still run.
-
-`--var name=value` defines a variable for every case of the run and may be
-repeated. It overrides a variable of the same name in the case's `vars:`. A
-`--var` without `=` or with an empty name is a usage error (exit 2).
-
-`--bundle-dir <directory>` changes where failure bundles are written (see
-[Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
-
-## Case files
-
-A case is a YAML file with a name, optional variables and a list of steps. Each
-step is a mapping with exactly one step name, optionally followed by `expect`
-and `save`:
+Create `cases/smoke.yaml`:
 
 ```yaml
-name: Login returns a token
-vars:
-  port: "8080"
+name: GitHub API returns the repository
 steps:
   - http.request:
-      method: POST
-      url: http://127.0.0.1:${port}/login
-      json: { user: alice, password: secret }
+      url: https://api.github.com/repos/LnYo-Cly/test-anything
+      headers: { User-Agent: ta-demo }
     expect:
       - path: $.status
         equals: 200
-      - path: $.body.token
-        exists: true
-    save:
-      token: $.body.token
-  - http.request:
-      url: http://127.0.0.1:${port}/me
-      headers: { Authorization: "Bearer ${token}" }
-    expect:
-      - path: $.body.name
-        equals: alice
+      - path: $.body.license.spdx_id
+        equals: MIT
 ```
 
-Unknown fields in a case file, unregistered step names, step arguments that do
-not match the step's schema and undefined variables are all case errors.
-
-### Variables
-
-`vars:` defines variables for the whole case. `save:` copies a value out of a
-step result into a variable. A later step argument can use any defined variable
-as `${name}`. Substitution is textual and only happens inside strings, so a
-variable may not change the type of a value. Referencing a variable that is
-neither in `vars:` nor saved by an earlier step is a case error. `--var
-name=value` on the command line defines a variable for every case and overrides
-the same name in `vars:`.
-
-### Assertions
-
-`expect:` is a list of assertions evaluated against the step's JSON result. Each
-entry has a `path` — a [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html)
-expression such as `$.body.items[0].id` — and exactly one comparison:
-
-| Comparison | Meaning |
-| --- | --- |
-| `equals` | The selected value equals the expected JSON value. |
-| `not_equals` | The selected value differs from the expected JSON value. |
-| `contains` | A string contains a substring, or an array contains a value. |
-| `exists` | `true` requires a value, `false` requires none. |
-
-Except for `exists`, the path must select exactly one value; a path that matches
-nothing fails the assertion and is reported as such instead of being compared
-with `null`. Member names that are not plain identifiers need bracket notation,
-for example `$.body.headers['content-type']`.
-
-### `http.request`
-
-| Argument | Meaning |
-| --- | --- |
-| `method` | HTTP method. Defaults to `GET`. |
-| `url` | Absolute URL including the scheme. Required. |
-| `headers` | Request headers. |
-| `query` | Query parameters appended to the URL, percent-encoded. |
-| `json` | JSON request body; `content-type: application/json` is added unless a header sets it. |
-| `body` | Raw request body. Mutually exclusive with `json`. |
-| `timeout_ms` | Timeout for the whole request. Defaults to `30000`. |
-
-The result is an object with `status` (a number), `headers` (lower-cased names)
-and `body`. A body that is valid JSON becomes a JSON value; anything else stays a
-string. A non-2xx status is not an error: it is part of the result and is judged
-by assertions. A refused connection or an unresolvable host is an environment
-error; exceeding `timeout_ms` is a timeout.
-
-### `cli.run`
-
-Runs a program without a shell and returns how it ended and what it wrote.
-
-| Argument | Meaning |
-| --- | --- |
-| `command` | Program name or path. Required. A relative path is resolved against the working directory of `ta`. |
-| `args` | List of arguments, one per entry. Nothing is quoted, expanded or split. |
-| `cwd` | Working directory of the program. Defaults to the working directory of `ta`. |
-| `env` | Variables added to the inherited environment, replacing names that are already set. |
-| `stdin` | Text written to the program's standard input. Without it the input is empty. |
-| `timeout_ms` | Timeout for the whole run. Defaults to `30000`. |
-
-The result is an object with `exit_code`, `stdout` and `stderr`, plus `json` when
-standard output is JSON:
+and `cases/git.yaml`, which checks a command-line program:
 
 ```yaml
+name: git is installed
 steps:
   - cli.run:
       command: git
-      args: ["rev-parse", "--short", "HEAD"]
+      args: ["--version"]
     expect:
       - path: $.exit_code
         equals: 0
-      - path: $.stderr
-        equals: ""
-      - path: $.json
-        exists: false
+      - path: $.stdout
+        contains: "git version 3"
 ```
 
-A non-zero exit code is not an error: it is part of the result and is judged by
-assertions. `exit_code` is `null` when the program was killed by a signal.
-Standard output and standard error are decoded as UTF-8, lossily. `json` is only
-present when standard output without surrounding whitespace parses as JSON, so a
-case can test it with `exists`.
+Run them:
 
-The arguments are passed to `std::process::Command` directly, so shell syntax
-such as quotes, `|` or `&&` does not apply. Run a shell explicitly when a case
-needs one, for example `command: sh, args: ["-c", "..."]`. A relative `command`
-and `cwd` are resolved against the working directory of the `ta` process, not
-against the case file.
-
-A program that cannot be started is an environment error (exit 4) whose message
-names it and says what to check. When `timeout_ms` expires the program is killed
-and the step is a timeout (exit 5). Both pipes are read on their own threads, so
-a program that writes more than a pipe buffer cannot deadlock the run; after the
-program ends `ta` waits at most one second for the pipes to close, so a process
-the program left behind cannot hang it.
-
-## Failure bundles
-
-Terminal output is truncated and gone after the run, so every case that does not
-pass also leaves a directory that an agent can read afterwards:
-
-```text
-.ta/failures/
-└── 1763000000123-4242/                run id: Unix milliseconds and process id
-    ├── 0-wrong-exit-code/
-    │   ├── case.yaml                  copy of the case file
-    │   ├── report.json                the case as `--output json` shows it
-    │   └── meta.json                  written last
-    └── 1-login-returns-a-token/
-        └── (the same three files)
+```console
+$ ta run cases/
+FAIL cases/git.yaml [git is installed] 70 ms
+  cli.run: 1 of 2 assertions failed
+    $.stdout contains "git version 3" (actual "git version 2.45.1\n")
+  bundle: .ta/failures/1794581562319-43704/0-git-is-installed
+PASS cases/smoke.yaml [GitHub API returns the repository] 1857 ms
+Summary: 2 cases (1 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 1936 ms
+$ echo $?
+1
 ```
 
-`meta.json` holds at least these fields:
+The failed case says which assertion failed and what the real value was, and its evidence is in `.ta/failures/…`. Add `--output json` for a single JSON object instead of text.
 
-| Field | Meaning |
+## What you can test today
+
+| Step | Tests | Result you assert on |
+| --- | --- | --- |
+| `http.request` | HTTP and HTTPS APIs | `status`, `headers`, `body` (parsed when JSON) |
+| `cli.run` | Command-line programs, run without a shell | `exit_code`, `stdout`, `stderr`, `json` |
+
+Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html). Variables: `vars`, `save` and `--var name=value`, referenced as `${name}`.
+
+## For coding agents
+
+`ta` is meant to be driven by an agent without a human reading the terminal:
+
+| Need | What `ta` gives |
 | --- | --- |
-| `schema_version` | Version of the layout, currently `1`. |
-| `ta_version` | Version of `ta` that wrote the bundle. |
-| `case_file` | Case file as given on the command line. |
-| `case_name` | Name of the case. |
-| `status` | `failed` or `error`. |
-| `created_at` | Unix milliseconds. |
+| A verdict | Exit code `0` passed, `1` failed, `2` usage, `3` invalid case, `4` environment, `5` timeout |
+| Details | `ta --output json run …`: one JSON object with every step result and assertion |
+| Evidence after the run | A failure bundle per failed case: `case.yaml`, `report.json`, `meta.json` (written last) |
+| Inputs from outside | `--var name=value` for URLs, tokens and paths |
 
-A case directory is staged under `.tmp-…` in the same parent, renamed into
-place, and only then does `meta.json` appear. **A directory without `meta.json`
-is incomplete and must be ignored**, including one left by an interrupted run.
+Everything is in the [guide](docs/guide.md): [case format](docs/guide.md#case-files), [output](docs/guide.md#output), [failure bundles](docs/guide.md#failure-bundles), [exit codes](docs/guide.md#exit-codes).
 
-The default directory is `.ta/failures` relative to the working directory of
-`ta`. `--bundle-dir <directory>` replaces it and `--no-bundle` turns bundles off.
-A run where every case passes creates nothing. When a bundle cannot be written,
-the exit code of the run does not change: the problem is reported on standard
-error and in the `bundle_errors` list of `--output json`.
+## Roadmap
 
-> A bundle contains the arguments and results of every step, which may include
-> credentials. Keep the bundle directory out of version control; `.ta/` is in
-> this repository's `.gitignore`.
+`ta` grows one layer at a time. Released features are checked.
 
-## Output
+- [x] YAML cases, assertions, variables, JSON output, precise exit codes
+- [x] `http.request` and `cli.run` steps, failure bundles, self-test suite
+- [x] One-line installers; Linux, macOS and Windows on x86_64 and Arm64
+- [ ] `ta lint` and `ta schema` — in progress
+- [ ] Case classification and filters: project, suite, layer, tags
+- [ ] Read-only observers for network, database and logs
+- [ ] Web UI testing
+- [ ] Agent integration: MCP server and skill files
+- [ ] Android, desktop apps, iOS, HarmonyOS
+- [ ] External drivers as plugins, for domains beyond software
 
-`--output text` (the default) writes one line per case to standard output, lists
-each failed assertion with its path, expected value and actual value, and ends
-with a summary line:
+## Documentation
 
-```text
-FAIL cases/login.yaml [Login returns a token] 6 ms
-  http.request: 1 of 2 assertions failed
-    $.status equals 201 (actual 200)
-  bundle: .ta/failures/1763000000123-4242/0-login-returns-a-token
-Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 7 ms
-```
-
-`--output json` writes exactly one JSON object to standard output:
-
-```json
-{
-  "ok": false,
-  "summary": {
-    "cases": 1,
-    "cases_passed": 0,
-    "cases_failed": 1,
-    "cases_errored": 0,
-    "steps": 2,
-    "steps_passed": 1,
-    "steps_failed": 1,
-    "steps_errored": 0,
-    "steps_skipped": 0,
-    "duration_ms": 7
-  },
-  "cases": [
-    {
-      "file": "cases/login.yaml",
-      "name": "Login returns a token",
-      "status": "failed",
-      "duration_ms": 6,
-      "bundle": ".ta/failures/1763000000123-4242/0-login-returns-a-token",
-      "error": { "kind": "assertion", "message": "1 of 2 assertions failed" },
-      "steps": [
-        {
-          "name": "http.request",
-          "status": "failed",
-          "duration_ms": 6,
-          "result": { "status": 200, "headers": { "content-type": "application/json" }, "body": { "token": "t-123" } },
-          "error": { "kind": "assertion", "message": "1 of 2 assertions failed" },
-          "assertions": [
-            { "path": "$.status", "comparison": "equals", "expected": 201, "actual": 200, "passed": false, "message": null },
-            { "path": "$.body.token", "comparison": "exists", "expected": true, "actual": "t-123", "passed": true, "message": null }
-          ]
-        }
-      ]
-    }
-  ],
-  "errors": [],
-  "bundle_errors": []
-}
-```
-
-`bundle` is the directory of the case's failure bundle, or `null` when the case
-passed or bundles are off. `bundle_errors` lists the bundles that could not be
-written; they never change the exit code.
-
-When no case can run, `cases` is empty and `errors` lists one entry per invalid
-file, with `file`, `message` and `kind`. Diagnostics never go to standard output.
-
-## Exit codes
-
-| Code | Meaning |
-| ---: | --- |
-| 0 | Every case ran and passed |
-| 1 | At least one case failed an assertion or could not finish a step |
-| 2 | Command-line usage error |
-| 3 | Invalid case file, invalid step arguments, unknown step or undefined variable |
-| 4 | Environment error (for example an unreachable target) |
-| 5 | Timeout |
-| 9 | Feature not implemented |
-
-When several kinds of problem occur in one run, the most fundamental one wins:
-3, then 4, then 5, then 1.
+- [Guide](docs/guide.md) — installation options, case format, steps, failure bundles, output, exit codes
+- [Release notes](https://github.com/LnYo-Cly/test-anything/releases)
+- [Contributing](CONTRIBUTING.md) — workflow, code rules, dependency policy
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)) for the commit and pull request format, project structure, code rules and dependency policy.
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)) first: it covers the commit and pull request format, project structure and how new dependencies are chosen. To build and test locally:
+
+```sh
+cargo build
+cargo test
+```
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
