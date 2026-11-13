@@ -3,6 +3,13 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
+use test_anything::core::case::{self, CaseError};
+use test_anything::core::events::EventBus;
+use test_anything::core::output::{self, Format};
+use test_anything::core::registry::Registry;
+use test_anything::core::report::RunOutcome;
+use test_anything::core::runner;
+use test_anything::drivers;
 use test_anything::exit::ExitCode as TaExitCode;
 
 /// An agent-friendly, cross-layer testing tool.
@@ -20,10 +27,19 @@ struct Cli {
 /// Output format selected with `--output`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
-    /// Human-readable messages on standard error.
+    /// Human-readable results on standard output, diagnostics on standard error.
     Text,
     /// A single JSON object on standard output.
     Json,
+}
+
+impl From<OutputFormat> for Format {
+    fn from(format: OutputFormat) -> Self {
+        match format {
+            OutputFormat::Text => Self::Text,
+            OutputFormat::Json => Self::Json,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -47,13 +63,63 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let name = match &cli.command {
-        Command::Run { .. } => "run",
-        Command::Lint { .. } => "lint",
-        Command::Schema => "schema",
-    };
+    let mut registry = Registry::new();
+    if let Err(message) = drivers::register(&mut registry) {
+        eprintln!("ta: internal error: {message}");
+        return TaExitCode::Environment.into();
+    }
 
-    match cli.output {
+    match cli.command {
+        Command::Run { paths } => run(&paths, cli.output, &registry),
+        Command::Lint { .. } => not_implemented("lint", cli.output),
+        Command::Schema => not_implemented("schema", cli.output),
+    }
+}
+
+fn run(paths: &[PathBuf], format: OutputFormat, registry: &Registry) -> ExitCode {
+    let outcome = execute(paths, registry);
+    let rendered = output::render(&outcome, format.into());
+    print!("{}", rendered.stdout);
+    eprint!("{}", rendered.stderr);
+    outcome.exit_code().into()
+}
+
+fn execute(paths: &[PathBuf], registry: &Registry) -> RunOutcome {
+    let files = match case::discover(paths) {
+        Ok(files) => files,
+        Err(error) => {
+            return RunOutcome::Rejected {
+                errors: vec![error],
+            };
+        }
+    };
+    if files.is_empty() {
+        return RunOutcome::Rejected {
+            errors: vec![CaseError {
+                file: paths.first().cloned().unwrap_or_default(),
+                message: "no `.yaml` or `.yml` case files found; pass a case file or a directory that contains one".to_string(),
+            }],
+        };
+    }
+
+    let mut loaded = Vec::with_capacity(files.len());
+    let mut errors = Vec::new();
+    for file in files {
+        match case::load_file(&file) {
+            Ok(loaded_case) => loaded.push(loaded_case),
+            Err(error) => errors.push(error),
+        }
+    }
+    if !errors.is_empty() {
+        return RunOutcome::Rejected { errors };
+    }
+
+    let bus = EventBus::new();
+    runner::run(&loaded, registry, &bus)
+}
+
+fn not_implemented(name: &str, format: OutputFormat) -> ExitCode {
+    match format {
         OutputFormat::Text => {
             eprintln!("ta {name}: not implemented yet");
         }
@@ -70,6 +136,5 @@ fn main() -> ExitCode {
             );
         }
     }
-
     TaExitCode::NotImplemented.into()
 }

@@ -2,15 +2,26 @@
 name = "test-anything"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.89"
 license = "MIT"
 
 [[bin]]
 name = "ta"
 path = "src/main.rs"
 
+[features]
+default = ["http"]
+# The `http.request` step and the HTTP client it needs.
+http = ["dep:schemars", "dep:ureq"]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+jsonpath-rust = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde-saphyr = { version = "2.1", default-features = false, features = ["deserialize"] }
 serde_json = "1"
+schemars = { version = "1.2", optional = true }
+ureq = { version = "3.5", default-features = false, features = ["json", "rustls"], optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
