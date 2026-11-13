@@ -14,7 +14,7 @@ Write a test as YAML, run it with `ta`, get a clear verdict, a precise exit code
 
 **English** · [简体中文](README.zh-CN.md)
 
-[Install](#install) · [Quick start](#quick-start) · [Guide](docs/guide.md) · [Roadmap](#roadmap) · [Contributing](CONTRIBUTING.md)
+[Install](#install) · [Quick start](#quick-start) · [Guide](docs/guide.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -116,21 +116,6 @@ Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https
 | The case format, machine-readable | `ta schema`: a JSON Schema with every registered step, also usable by editors |
 
 Everything is in the [guide](docs/guide.md): [case format](docs/guide.md#case-files), [output](docs/guide.md#output), [failure bundles](docs/guide.md#failure-bundles), [linting](docs/guide.md#linting), [schema](docs/guide.md#schema), [exit codes](docs/guide.md#exit-codes).
-
-## Roadmap
-
-`ta` grows one layer at a time. Released features are checked.
-
-- [x] YAML cases, assertions, variables, JSON output, precise exit codes
-- [x] `http.request` and `cli.run` steps, failure bundles, self-test suite
-- [x] One-line installers; Linux, macOS and Windows on x86_64 and Arm64
-- [x] `ta lint` and `ta schema`
-- [ ] Case classification and filters: project, suite, layer, tags
-- [ ] Read-only observers for network, database and logs
-- [ ] Web UI testing
-- [ ] Agent integration: MCP server and skill files
-- [ ] Android, desktop apps, iOS, HarmonyOS
-- [ ] External drivers as plugins, for domains beyond software
 
 ## Documentation
 
