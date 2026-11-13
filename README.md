@@ -62,3 +62,7 @@ JSON object to standard output:
 
 Codes 0, 2, and 9 are the only ones currently produced; the rest are reserved
 for the features that follow.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
