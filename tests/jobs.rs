@@ -4,11 +4,11 @@
 //! a local server that the test starts itself, so nothing here reaches the
 //! network and no system command is required.
 
-// Every test needs at least one driver, so a build without drivers compiles an
-// empty test target instead of a file whose helpers are all unused.
-#![cfg(any(feature = "http", feature = "cli"))]
-// Each test is gated on the feature it needs, so a build with one driver uses a
-// subset of the helpers below.
+// Every case here starts a program, so a build without the `cli` driver has
+// nothing to run: it compiles an empty test target instead of a file whose
+// helpers would all be unused.
+#![cfg(feature = "cli")]
+// A build with one driver uses a subset of the helpers below.
 #![allow(dead_code)]
 
 mod support;
@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::Instant;
 
 use serde_json::{Value, json};
 use support::TempDir;
@@ -427,11 +426,11 @@ steps:
         );
     }
 
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let serial = run_ta_in(dir.path(), &["run", "cases", "--jobs", "1"]);
     let serial_elapsed = started.elapsed();
 
-    let started = Instant::now();
+    let started = std::time::Instant::now();
     let parallel = run_ta_in(dir.path(), &["run", "cases", "--jobs", "4"]);
     let parallel_elapsed = started.elapsed();
 
