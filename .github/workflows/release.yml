@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - docs/releases/**
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        name: Check version and release notes
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from Cargo.toml"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
+            exit 1
+          fi
+          if [ ! -f "docs/releases/v${version}.md" ]; then
+            echo "::error::Missing release notes docs/releases/v${version}.md"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, musl: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, musl: true }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, exe: .exe }
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      BIN: target/${{ matrix.target }}/release/ta${{ matrix.exe }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Smoke test
+        run: |
+          set -u
+          actual=$("$BIN" --version)
+          if [ "$actual" != "ta ${VERSION}" ]; then
+            echo "::error::Expected 'ta ${VERSION}', got '${actual}'"
+            exit 1
+          fi
+
+          printf 'name: smoke\nnaem: typo\nsteps: []\n' > invalid.yaml
+          code=0; "$BIN" run invalid.yaml || code=$?
+          if [ "$code" -ne 3 ]; then
+            echo "::error::An invalid case should exit 3, got ${code}"
+            exit 1
+          fi
+
+          printf 'name: smoke\nsteps:\n  - http.request: { url: "http://127.0.0.1:9/", timeout_ms: 5000 }\n' > unreachable.yaml
+          code=0; "$BIN" run unreachable.yaml || code=$?
+          if [ "$code" -ne 4 ]; then
+            echo "::error::An unreachable target should exit 4, got ${code}"
+            exit 1
+          fi
+          echo "Smoke test passed on ${TARGET}"
+      - name: Package
+        run: |
+          name="ta-v${VERSION}-${TARGET}"
+          mkdir -p "dist/${name}"
+          cp "$BIN" LICENSE README.md "dist/${name}/"
+          cd dist
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            7z a -tzip "${name}.zip" "${name}" > /dev/null
+          else
+            tar czf "${name}.tar.gz" "${name}"
+          fi
+          rm -rf "${name}"
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ta-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [prepare, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create release
+        run: |
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "docs/releases/${GITHUB_REF_NAME}.md" \
+            ${prerelease}
