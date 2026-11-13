@@ -47,7 +47,9 @@ pub fn case_schema(registry: &Registry) -> Value {
         "required": ["name", "steps"],
         "properties": {
             "name": {
-                "type": "string",
+                // The parser reads the name as text and accepts a YAML
+                // string, number or boolean scalar there.
+                "type": ["string", "number", "boolean"],
                 "description": "Human-readable case name shown in reports."
             },
             "vars": {
@@ -190,6 +192,11 @@ mod tests {
         assert_eq!(schema["type"], "object");
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["name", "steps"]));
+        assert_eq!(
+            schema["properties"]["name"]["type"],
+            json!(["string", "number", "boolean"]),
+            "the parser accepts every YAML scalar as the case name"
+        );
         assert_eq!(schema["properties"]["steps"]["minItems"], 1);
     }
 

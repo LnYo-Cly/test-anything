@@ -122,6 +122,38 @@ fn an_unknown_top_level_field_is_rejected() {
     );
 }
 
+#[cfg(feature = "cli")]
+#[test]
+fn non_string_case_names_pass_the_schema_and_lint() {
+    let dir = TempDir::new("schema-name-scalars");
+    let validator = validator(schema());
+
+    for (yaml, label) in [("123", "number"), ("true", "boolean")] {
+        let path = dir.write(
+            &format!("name-{label}.yaml"),
+            &format!("name: {yaml}\nsteps:\n  - cli.run:\n      command: ta\n"),
+        );
+        let text = fs::read_to_string(&path).expect("the case must be readable");
+        let instance: Value = serde_saphyr::from_str(&text).expect("the case must be valid YAML");
+        assert!(
+            !instance["name"].is_string(),
+            "the regression must use a non-string YAML scalar, got: {instance}"
+        );
+        assert!(
+            validator.is_valid(&instance),
+            "the schema rejected a case name the parser accepts: {instance}"
+        );
+
+        let output = run_ta(&["lint", path.to_str().expect("the path must be UTF-8")]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`ta lint` must accept `name: {yaml}`, stderr: {:?}",
+            stderr(&output)
+        );
+    }
+}
+
 #[test]
 fn an_empty_step_list_is_rejected() {
     let instance = json!({"name": "No steps", "steps": []});
