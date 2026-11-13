@@ -48,8 +48,10 @@ impl Registry {
     /// Adds a step.
     ///
     /// Two steps with the same name would make a case ambiguous, so a
-    /// duplicate is refused instead of silently replacing the first.
+    /// duplicate is refused instead of silently replacing the first. The name
+    /// itself is checked by [`validate_name`].
     pub fn register(&mut self, definition: StepDefinition) -> Result<(), String> {
+        validate_name(definition.name)?;
         if self.steps.contains_key(definition.name) {
             return Err(format!(
                 "step `{}` is already registered; every step name must be unique",
@@ -69,6 +71,41 @@ impl Registry {
     pub fn names(&self) -> Vec<&'static str> {
         self.steps.keys().copied().collect()
     }
+}
+
+/// Field names every step already gives a meaning to.
+const RESERVED_NAMES: [&str; 2] = ["expect", "save"];
+
+/// Checks the name a step registers under.
+///
+/// A name is written in every case that uses the step and becomes a key of the
+/// schema's `$defs`, so it is limited to characters that need no escaping and
+/// that read the same on every platform. The two fields a step already carries,
+/// `expect` and `save`, cannot also name a step.
+fn validate_name(name: &str) -> Result<(), String> {
+    if RESERVED_NAMES.contains(&name) {
+        return Err(format!(
+            "step name `{name}` is reserved for the case format; choose another name"
+        ));
+    }
+    if name.is_empty() {
+        return Err(
+            "step name is empty; use lowercase letters, digits, `.`, `_` and `-`".to_string(),
+        );
+    }
+    if let Some(character) = name.chars().find(|character| !is_allowed(*character)) {
+        return Err(format!(
+            "step name `{name}` contains `{character}`; use only lowercase letters, digits, `.`, `_` and `-`"
+        ));
+    }
+    Ok(())
+}
+
+/// Whether one character may appear in a step name.
+fn is_allowed(character: char) -> bool {
+    character.is_ascii_lowercase()
+        || character.is_ascii_digit()
+        || matches!(character, '.' | '_' | '-')
 }
 
 #[cfg(test)]
@@ -108,5 +145,60 @@ mod tests {
             .register(definition("test.one"))
             .expect_err("the duplicate must be refused");
         assert!(error.contains("test.one"), "got: {error}");
+    }
+
+    #[test]
+    fn accepts_the_characters_a_step_name_may_use() {
+        for name in ["demo.call", "demo_call", "demo-call", "demo2.call", "a"] {
+            let mut registry = Registry::new();
+            registry
+                .register(definition(name))
+                .unwrap_or_else(|error| panic!("`{name}` must be accepted: {error}"));
+        }
+    }
+
+    #[test]
+    fn refuses_a_name_with_a_character_outside_the_rule() {
+        for (name, offending) in [
+            ("Demo.call", 'D'),
+            ("demo/Call", '/'),
+            ("demo~call", '~'),
+            ("demo call", ' '),
+            ("demo:call", ':'),
+            ("demo.cäse", 'ä'),
+            ("", '\0'),
+        ] {
+            let mut registry = Registry::new();
+            let error = registry
+                .register(definition(name))
+                .expect_err("the name must be refused");
+
+            assert!(
+                error.contains("lowercase letters"),
+                "the message must state the rule for `{name}`, got: {error}"
+            );
+            if !name.is_empty() {
+                assert!(
+                    error.contains(offending),
+                    "the message must name `{offending}` in `{name}`, got: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_the_names_the_case_format_already_uses() {
+        for name in ["expect", "save"] {
+            let mut registry = Registry::new();
+            let error = registry
+                .register(definition(name))
+                .expect_err("a reserved name must be refused");
+
+            assert!(
+                error.contains("reserved"),
+                "the message must say the name is reserved, got: {error}"
+            );
+            assert!(error.contains(name), "got: {error}");
+        }
     }
 }
