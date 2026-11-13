@@ -94,5 +94,5 @@ mv -f "${INSTALL_DIR}/.ta.new" "${INSTALL_DIR}/ta"
 printf 'Installed %s to %s\n' "$("${INSTALL_DIR}/ta" --version)" "${INSTALL_DIR}/ta"
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
-  *) printf '%s is not on PATH. Add this line to your shell profile:\n  export PATH="%s:$PATH"\n' "$INSTALL_DIR" "$INSTALL_DIR" ;;
+  *) printf '%s is not on PATH. Add this line to your shell profile:\n  export PATH="%s:%s"\n' "$INSTALL_DIR" "$INSTALL_DIR" "\$PATH" ;;
 esac
