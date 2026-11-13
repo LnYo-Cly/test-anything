@@ -809,6 +809,68 @@ fn is_yaml(path: &Path) -> bool {
         })
 }
 
+/// Loads a `--vars-file`: a YAML mapping of names to string, number or boolean
+/// values.
+///
+/// The values are read the same way a case's `vars:` are, so a number or a
+/// boolean becomes its text form. A problem is reported with the file and, when
+/// the parser knows it, the line and column of the offending value; the caller
+/// decides the exit code.
+pub fn load_vars_file(path: &Path) -> Result<Vec<(String, String)>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "could not read `{}`: {error}; check that the file exists and is UTF-8",
+            paths::display(path)
+        )
+    })?;
+    let raw: Spanned<BTreeMap<String, Spanned<Value>>> =
+        serde_saphyr::from_str(&text).map_err(|error| {
+            format!(
+                "{}: {}",
+                paths::display(path),
+                strip_error_prefix(&error.to_string())
+            )
+        })?;
+
+    let mut values = Vec::with_capacity(raw.value.len());
+    for (name, value) in raw.value {
+        let location = value.referenced;
+        let text = match value.value {
+            Value::String(text) => text,
+            Value::Number(number) => number.to_string(),
+            Value::Bool(flag) => flag.to_string(),
+            Value::Null => {
+                return Err(vars_file_problem(
+                    path,
+                    &text,
+                    location,
+                    format!("variable `{name}` has no value; use a string, number or boolean"),
+                ));
+            }
+            Value::Array(_) | Value::Object(_) => {
+                return Err(vars_file_problem(
+                    path,
+                    &text,
+                    location,
+                    format!("variable `{name}` must be a string, number or boolean"),
+                ));
+            }
+        };
+        values.push((name, text));
+    }
+    Ok(values)
+}
+
+/// Renders a problem of a `--vars-file` the way a case error is rendered: the
+/// file name, then the location and source snippet when there is one.
+fn vars_file_problem(path: &Path, source: &str, location: Location, message: String) -> String {
+    format!(
+        "{}: {}",
+        paths::display(path),
+        Problem { location, message }.render(source)
+    )
+}
+
 /// Loads and parses one case file.
 pub fn load_file(path: &Path) -> Result<LoadedCase, CaseError> {
     let text = std::fs::read_to_string(path).map_err(|error| CaseError {
@@ -1143,5 +1205,77 @@ steps:
         assert_eq!(names, vec!["a.yml", "b.yaml", "c.yaml"]);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_vars_file_reads_strings_numbers_and_booleans_as_text() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(
+            &path,
+            "name: alice\nport: 8080\nratio: 1.5\nenabled: true\ndisabled: false\n",
+        )
+        .expect("write the vars file");
+
+        let values = load_vars_file(&path).expect("the vars file must load");
+
+        assert_eq!(
+            values,
+            vec![
+                ("disabled".to_string(), "false".to_string()),
+                ("enabled".to_string(), "true".to_string()),
+                ("name".to_string(), "alice".to_string()),
+                ("port".to_string(), "8080".to_string()),
+                ("ratio".to_string(), "1.5".to_string()),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vars_file_value_that_is_not_scalar_names_its_line() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-type-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "name: alice\ntoken:\n  - one\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the value must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(error.contains("token"), "got: {error}");
+        assert!(error.contains("line 3 column 3: "), "got: {error}");
+        assert!(
+            error.contains("must be a string, number or boolean"),
+            "got: {error}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vars_file_that_is_not_a_mapping_is_reported_with_its_file() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "- one\n- two\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the document must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(error.contains("line 1"), "got: {error}");
+
+        let missing = load_vars_file(&dir.join("nope.yaml")).expect_err("the file must be missing");
+        assert!(missing.contains("nope.yaml"), "got: {missing}");
+        assert!(
+            missing.contains("check that the file exists"),
+            "got: {missing}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

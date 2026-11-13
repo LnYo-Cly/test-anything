@@ -55,6 +55,10 @@ enum Command {
         /// Overrides a case variable. Repeat for more than one.
         #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
         vars: Vec<(String, String)>,
+        /// Reads variables from a YAML mapping. Repeat for more than one; a
+        /// later file overrides an earlier one.
+        #[arg(long = "vars-file", value_name = "FILE")]
+        vars_files: Vec<PathBuf>,
         /// Only runs cases in one of these projects. Repeat for more than one.
         #[arg(long = "project", value_name = "NAME")]
         projects: Vec<String>,
@@ -85,6 +89,10 @@ enum Command {
         /// Defines a variable for every case. Repeat for more than one.
         #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
         vars: Vec<(String, String)>,
+        /// Reads variables from a YAML mapping. Repeat for more than one; a
+        /// later file overrides an earlier one.
+        #[arg(long = "vars-file", value_name = "FILE")]
+        vars_files: Vec<PathBuf>,
     },
     /// Print the JSON Schema for the case file format.
     Schema,
@@ -116,6 +124,7 @@ fn main() -> ExitCode {
         Command::Run {
             paths,
             vars,
+            vars_files,
             projects,
             suites,
             layers,
@@ -124,6 +133,10 @@ fn main() -> ExitCode {
             bundle_dir,
             no_bundle,
         } => {
+            let sources = match VarSources::load(&vars_files, &vars) {
+                Ok(sources) => sources,
+                Err(message) => return usage_error(&message),
+            };
             let filters = Filters {
                 project: projects,
                 suite: suites,
@@ -132,24 +145,67 @@ fn main() -> ExitCode {
                 skip_tag: skip_tags,
             };
             run(
-                &paths, cli.output, &registry, &vars, &filters, bundle_dir, no_bundle,
+                &paths, cli.output, &registry, &sources, &filters, bundle_dir, no_bundle,
             )
         }
-        Command::Lint { paths, vars } => lint(&paths, cli.output, &registry, &vars),
+        Command::Lint {
+            paths,
+            vars,
+            vars_files,
+        } => {
+            let sources = match VarSources::load(&vars_files, &vars) {
+                Ok(sources) => sources,
+                Err(message) => return usage_error(&message),
+            };
+            lint(&paths, cli.output, &registry, &sources)
+        }
         Command::Schema => print_schema(&registry, cli.output),
     }
+}
+
+/// Variables that come from outside the case file, in increasing precedence.
+#[derive(Debug, Default)]
+struct VarSources {
+    /// The values of each `--vars-file`, with the file they came from, in
+    /// command-line order.
+    files: Vec<(PathBuf, Vec<(String, String)>)>,
+    /// The values of each `--var`.
+    inline: Vec<(String, String)>,
+}
+
+impl VarSources {
+    /// Reads every `--vars-file` in command-line order.
+    ///
+    /// The file each value came from is kept so that a problem inside one can
+    /// name it; the values are applied in this order, so a later file wins.
+    fn load(paths: &[PathBuf], inline: &[(String, String)]) -> Result<Self, String> {
+        let mut files = Vec::with_capacity(paths.len());
+        for path in paths {
+            files.push((path.clone(), case::load_vars_file(path)?));
+        }
+        Ok(Self {
+            files,
+            inline: inline.to_vec(),
+        })
+    }
+}
+
+/// Reports a problem with the command line without running anything.
+fn usage_error(message: &str) -> ExitCode {
+    let _ = write_stderr(&format!("error: {message}\n"));
+    TaExitCode::Usage.into()
 }
 
 fn run(
     paths: &[PathBuf],
     format: OutputFormat,
     registry: &Registry,
-    vars: &[(String, String)],
+    sources: &VarSources,
     filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
 ) -> ExitCode {
-    let outcome = execute(paths, registry, vars, filters, bundle_dir, no_bundle);
+    let outcome = execute(paths, registry, sources, filters, bundle_dir, no_bundle);
     let rendered = output::render(&outcome, format.into());
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
@@ -162,12 +218,12 @@ fn run(
 fn execute(
     paths: &[PathBuf],
     registry: &Registry,
-    vars: &[(String, String)],
+    sources: &VarSources,
     filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
 ) -> RunOutcome {
-    let LoadedCases { cases, errors, .. } = load_cases(paths, vars);
+    let LoadedCases { cases, errors, .. } = load_cases(paths, sources);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
@@ -193,14 +249,14 @@ fn lint(
     paths: &[PathBuf],
     format: OutputFormat,
     registry: &Registry,
-    vars: &[(String, String)],
+    sources: &VarSources,
 ) -> ExitCode {
     let LoadedCases {
         files,
         cases,
         errors,
         ..
-    } = load_cases(paths, vars);
+    } = load_cases(paths, sources);
     let mut errors = errors;
     errors.extend(runner::preflight(&cases, registry));
 
@@ -240,7 +296,7 @@ struct LoadedCases {
 ///
 /// A file that does not parse becomes an entry in `errors`; the remaining files
 /// still load, so lint can report every problem at once.
-fn load_cases(paths: &[PathBuf], vars: &[(String, String)]) -> LoadedCases {
+fn load_cases(paths: &[PathBuf], sources: &VarSources) -> LoadedCases {
     let files = match case::discover(paths) {
         Ok(files) => files,
         Err(error) => {
@@ -264,12 +320,19 @@ fn load_cases(paths: &[PathBuf], vars: &[(String, String)]) -> LoadedCases {
 
     let mut cases = Vec::with_capacity(files.len());
     let mut errors = Vec::new();
+    // The command line beats the case file, and a later source beats an earlier
+    // one: `vars:` first, then each `--vars-file` in order, then `--var`.
+    let mut overrides: Vec<(String, String)> = Vec::new();
+    for (_, entries) in &sources.files {
+        overrides.extend(entries.iter().cloned());
+    }
+    overrides.extend(sources.inline.iter().cloned());
+
     for file in &files {
         match case::load_file(file) {
             Ok(mut loaded_case) => {
-                // Command-line variables beat the ones in the case file, and
-                // beat nothing else: a case that does not use the name ignores it.
-                for (name, value) in vars {
+                // A case that does not use the name ignores it.
+                for (name, value) in &overrides {
                     loaded_case.case.vars.insert(name.clone(), value.clone());
                 }
                 cases.push(loaded_case);
