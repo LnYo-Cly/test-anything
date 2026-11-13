@@ -446,7 +446,7 @@ pass also leaves a directory that an agent can read afterwards:
 | --- | --- |
 | `schema_version` | Version of the layout, currently `1`. |
 | `ta_version` | Version of `ta` that wrote the bundle. |
-| `case_file` | Case file as given on the command line. |
+| `case_file` | Case file, with `/` as the separator. |
 | `case_name` | Name of the case. |
 | `project` | Project the case declares, or `null`. |
 | `suite` | Suite the case declares, or `null`. |
@@ -541,6 +541,10 @@ passed or bundles are off. `bundle_errors` lists the bundles that could not be
 written; they never change the exit code. Every case also carries its
 `project`, `suite`, `layer` (`null` when not declared) and `tags` (`[]` when
 none), and `summary.filtered` counts the cases the filters excluded.
+
+Every path that `ta` prints, in text output, in JSON and in a failure bundle,
+uses `/` as the separator on every platform, so a path from the output can be
+copied back unchanged.
 
 When no case can run, `cases` is empty and `errors` lists one entry per invalid
 file, with `file`, `message` and `kind`. When the filters select no case,

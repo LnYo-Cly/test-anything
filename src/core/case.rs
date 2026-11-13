@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::core::paths;
 use jsonpath_rust::JsonPath;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -462,7 +463,7 @@ pub fn discover(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, CaseError> {
             file: input.clone(),
             message: format!(
                 "could not read `{}`: {error}; check that the path exists",
-                input.display()
+                paths::display(input)
             ),
         })?;
         if metadata.is_dir() {
@@ -479,16 +480,22 @@ pub fn discover(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, CaseError> {
 fn collect_yaml(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), CaseError> {
     let entries = std::fs::read_dir(dir).map_err(|error| CaseError {
         file: dir.to_path_buf(),
-        message: format!("could not list `{}`: {error}", dir.display()),
+        message: format!("could not list `{}`: {error}", paths::display(dir)),
     })?;
     for entry in entries {
         let entry = entry.map_err(|error| CaseError {
             file: dir.to_path_buf(),
-            message: format!("could not read an entry of `{}`: {error}", dir.display()),
+            message: format!(
+                "could not read an entry of `{}`: {error}",
+                paths::display(dir)
+            ),
         })?;
         let file_type = entry.file_type().map_err(|error| CaseError {
             file: entry.path(),
-            message: format!("could not inspect `{}`: {error}", entry.path().display()),
+            message: format!(
+                "could not inspect `{}`: {error}",
+                paths::display(&entry.path())
+            ),
         })?;
         let path = entry.path();
         if file_type.is_dir() {

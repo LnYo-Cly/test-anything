@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::core::assert::AssertionReport;
 use crate::core::case::{CaseError, LoadedCase};
+use crate::core::paths;
 use crate::core::report::{CaseReport, CaseStatus, Problem, RunOutcome, StepReport, Summary};
 
 /// How results are rendered.
@@ -101,7 +102,7 @@ fn text_lint(report: &LintReport) -> Rendered {
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ");
-        stdout.push_str(&format!("{}: {message}\n", error.file.display()));
+        stdout.push_str(&format!("{}: {message}\n", paths::display(&error.file)));
     }
     stdout.push_str(&format!(
         "Checked {} {}: {} {}.\n",
@@ -125,7 +126,7 @@ fn json_lint(report: &LintReport) -> Value {
             .iter()
             .map(|error| {
                 json!({
-                    "file": error.file.display().to_string(),
+                    "file": paths::display(&error.file),
                     "message": error.message,
                 })
             })
@@ -135,7 +136,7 @@ fn json_lint(report: &LintReport) -> Value {
             .iter()
             .map(|case| {
                 json!({
-                    "file": case.file.display().to_string(),
+                    "file": paths::display(&case.file),
                     "name": case.name,
                     "project": case.project,
                     "suite": case.suite,
@@ -192,7 +193,7 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
             for error in errors {
                 stderr.push_str(&format!(
                     "error: {}: {}\n",
-                    error.file.display(),
+                    paths::display(&error.file),
                     error.message
                 ));
             }
@@ -208,7 +209,7 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
         stdout.push_str(&format!(
             "{} {} [{}] {} ms\n",
             label(case.status),
-            case.file.display(),
+            paths::display(&case.file),
             case.name,
             millis(case.duration)
         ));
@@ -223,7 +224,7 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
             }
         }
         if let Some(bundle) = &case.bundle {
-            stdout.push_str(&format!("  bundle: {}\n", bundle.display()));
+            stdout.push_str(&format!("  bundle: {}\n", paths::display(bundle)));
         }
     }
 
@@ -338,7 +339,7 @@ fn json_report(outcome: &RunOutcome) -> Value {
                         .iter()
                         .map(|error| {
                             json!({
-                                "file": error.file.display().to_string(),
+                                "file": paths::display(&error.file),
                                 "message": error.message,
                                 "kind": "invalid_input",
                             })
@@ -381,7 +382,7 @@ fn summary_value(summary: &Summary, duration: std::time::Duration) -> Value {
 /// command output cannot describe the same case differently.
 pub fn case_json(case: &CaseReport) -> Value {
     json!({
-        "file": case.file.display().to_string(),
+        "file": paths::display(&case.file),
         "name": case.name,
         "project": case.project,
         "suite": case.suite,
@@ -389,7 +390,7 @@ pub fn case_json(case: &CaseReport) -> Value {
         "tags": case.tags,
         "status": case.status.as_str(),
         "duration_ms": millis(case.duration),
-        "bundle": case.bundle.as_ref().map(|path| path.display().to_string()),
+        "bundle": case.bundle.as_ref().map(|path| paths::display(path)),
         "steps": case.steps.iter().map(step_value).collect::<Vec<Value>>(),
         "error": case.error.as_ref().map(problem_value),
     })
@@ -535,6 +536,31 @@ mod tests {
         assert_eq!(value["cases"][0]["steps"][0]["error"]["kind"], "assertion");
         assert_eq!(value["errors"], json!([]));
         assert_eq!(value["bundle_errors"], json!([]));
+    }
+
+    #[test]
+    fn reported_paths_use_forward_slashes_on_every_platform() {
+        let RunOutcome::Completed(mut report) = failing_outcome() else {
+            panic!("the fixture must be a completed run");
+        };
+        report.cases[0].file = PathBuf::from(r"G:\cases\login.yaml");
+        report.cases[0].bundle = Some(PathBuf::from(r"G:\cases\.ta\failures\1-0-Login"));
+        let outcome = RunOutcome::Completed(report);
+
+        let json = render(&outcome, Format::Json);
+        let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
+        assert_eq!(value["cases"][0]["file"], "G:/cases/login.yaml");
+        assert_eq!(
+            value["cases"][0]["bundle"],
+            "G:/cases/.ta/failures/1-0-Login"
+        );
+
+        let text = render(&outcome, Format::Text);
+        assert!(
+            !text.stdout.contains('\\'),
+            "text output must not mix separators, got: {}",
+            text.stdout
+        );
     }
 
     #[test]

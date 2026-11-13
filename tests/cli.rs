@@ -872,6 +872,58 @@ steps:
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
 
+/// Paths reported to people and machines use `/` on every platform.
+///
+/// A case path built from a `/`-separated directory and a discovered file used
+/// to mix both separators, for example `G:/cases\\login.yaml`, which an agent
+/// cannot copy from the output as it stands.
+#[test]
+#[cfg(feature = "cli")]
+fn reported_paths_use_forward_slashes_only() {
+    let dir = TempDir::new("path-separators");
+    let case = dir.write("failing.yaml", &wrong_expectation_case("Path separators"));
+    let root = dir.path().join("failures");
+
+    let output = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(&case),
+        "--bundle-dir",
+        path_str(&root),
+    ]);
+
+    assert_eq!(exit_code(&output), Some(1), "stderr: {:?}", stderr(&output));
+    let value = json_stdout(&output);
+    let reported = &value["cases"][0];
+    let file = reported["file"]
+        .as_str()
+        .expect("a case must report its file");
+    let bundle = reported["bundle"]
+        .as_str()
+        .expect("a failed case must report its bundle");
+    assert!(
+        !file.contains('\\'),
+        "the JSON `file` must use `/` only, got: {file}"
+    );
+    assert!(
+        !bundle.contains('\\'),
+        "the JSON `bundle` must use `/` only, got: {bundle}"
+    );
+    assert!(
+        file.ends_with("failing.yaml"),
+        "the file must still name the case file, got: {file}"
+    );
+
+    let text = run_ta(&["run", path_str(&case), "--bundle-dir", path_str(&root)]);
+    assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
+    assert!(
+        !stdout(&text).contains('\\'),
+        "text output must use `/` only, got: {:?}",
+        stdout(&text)
+    );
+}
+
 #[test]
 #[cfg(feature = "cli")]
 fn a_missing_program_exits_four_and_names_it() {
