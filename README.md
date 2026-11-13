@@ -11,7 +11,40 @@ case does not pass, and describes every run as text or JSON; `ta lint` and
 
 ## Install
 
-Download a prebuilt binary for Linux, macOS or Windows from [GitHub Releases](https://github.com/LnYo-Cly/test-anything/releases), extract it, and put `ta` on your `PATH`. Each release includes a `SHA256SUMS` file.
+Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.ps1 | iex
+```
+
+The scripts pick the build for your system and CPU (x86_64 or Arm64), download the latest release, check it against `SHA256SUMS`, and install `ta` without administrator rights: to `~/.local/bin` on Linux and macOS, and to `%LOCALAPPDATA%\Programs\ta` on Windows, which is added to your user `PATH`. On Linux and macOS the script prints the line to add when the directory is not on `PATH` yet.
+
+If `raw.githubusercontent.com` is slow or blocked on your network, fetch the same scripts from jsDelivr:
+
+```sh
+curl -fsSL https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.sh | sh
+```
+
+```powershell
+irm https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.ps1 | iex
+```
+
+Options, set as environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `TA_VERSION` | Release to install, for example `v0.2.0`. Default: the latest. |
+| `TA_INSTALL_DIR` | Directory that receives `ta`. |
+| `TA_DOWNLOAD_URL` | Base URL of a mirror or proxy that serves the release files as `<base>/<tag>/<file>`. The archive and `SHA256SUMS` both come from it, so use one you trust. Finding the latest release still contacts `github.com` unless `TA_VERSION` is set. |
+| `TA_NO_MODIFY_PATH` | Windows only: leave the user `PATH` unchanged. |
+
+You can also download an archive from [GitHub Releases](https://github.com/LnYo-Cly/test-anything/releases) yourself, extract it, and put `ta` on your `PATH`. Each release includes a `SHA256SUMS` file.
 
 ## Build
 

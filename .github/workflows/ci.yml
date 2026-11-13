@@ -46,3 +46,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Runs the published install commands against the real GitHub Releases.
+  install:
+    name: Install script (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint install.sh
+        if: runner.os == 'Linux'
+        run: shellcheck install.sh
+      - name: Install with install.sh
+        if: runner.os != 'Windows'
+        shell: sh
+        run: |
+          set -eu
+          TA_INSTALL_DIR="$RUNNER_TEMP/latest" sh install.sh
+          "$RUNNER_TEMP/latest/ta" --version | grep '^ta [0-9]'
+          TA_VERSION=v0.1.0 TA_INSTALL_DIR="$RUNNER_TEMP/pinned" sh install.sh
+          test "$("$RUNNER_TEMP/pinned/ta" --version)" = "ta 0.1.0"
+          if TA_VERSION=v9.9.9 TA_INSTALL_DIR="$RUNNER_TEMP/missing" sh install.sh; then
+            echo "installing a missing version must fail"; exit 1
+          fi
+          test ! -e "$RUNNER_TEMP/missing/ta"
+      - name: Install with install.ps1 (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:TA_NO_MODIFY_PATH = '1'
+          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\latest"
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          & "$env:RUNNER_TEMP\latest\ta.exe" --version
+          $env:TA_VERSION = 'v0.1.0'
+          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\pinned"
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          if ((& "$env:RUNNER_TEMP\pinned\ta.exe" --version) -ne 'ta 0.1.0') { throw 'expected ta 0.1.0' }
+          $env:TA_VERSION = 'v9.9.9'
+          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\missing"
+          $failed = $false
+          try { Get-Content install.ps1 -Raw | Invoke-Expression } catch { $failed = $true }
+          if (-not $failed) { throw 'installing a missing version must fail' }
+          if (Test-Path "$env:RUNNER_TEMP\missing\ta.exe") { throw 'a failed install left ta.exe behind' }
+      - name: Install with install.ps1 (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:TA_NO_MODIFY_PATH = '1'
+          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\ps51"
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          & "$env:RUNNER_TEMP\ps51\ta.exe" --version
