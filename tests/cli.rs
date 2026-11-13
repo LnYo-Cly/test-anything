@@ -1,4 +1,4 @@
-//! End-to-end tests that run the compiled `ta` binary.
+﻿//! End-to-end tests that run the compiled `ta` binary.
 
 mod support;
 
@@ -984,9 +984,18 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
     );
 }
 
+/// A `cli.run` that outlives its `timeout_ms` is a timeout, not a failure.
+///
+/// The test asserts the reported timeout and that the step really waited for
+/// it. It deliberately has no upper bound: `ta` also starts a child process,
+/// writes a failure bundle and drains two pipes, and on a loaded machine those
+/// steps dominate the wall clock of the whole command. A ceiling measured on
+/// the whole process would fail whenever the machine is busy, not when the
+/// timeout is broken.
 #[test]
 #[cfg(all(feature = "cli", feature = "http"))]
 fn a_cli_step_that_exceeds_its_timeout_exits_five() {
+    const TIMEOUT_MS: u64 = 150;
     let server = TestServer::start();
     let dir = TempDir::new("cli-timeout");
     // The child is `ta` itself, waiting on a local service that answers slowly.
@@ -1006,7 +1015,7 @@ steps:
   - cli.run:
       command: '{}'
       args: ["run", '{}']
-      timeout_ms: 150
+      timeout_ms: {TIMEOUT_MS}
 "#,
             ta(),
             slow.display()
@@ -1014,13 +1023,34 @@ steps:
     );
 
     let started = std::time::Instant::now();
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_ta(&["--output", "json", "run", path_str(&case)]);
     let elapsed = started.elapsed();
 
     assert_eq!(exit_code(&output), Some(5), "stderr: {:?}", stderr(&output));
+    let value = json_stdout(&output);
+    let case_report = &value["cases"][0];
+    assert_eq!(case_report["status"], "error");
+    let error = &case_report["steps"][0]["error"];
+    assert_eq!(
+        error["kind"], "timeout",
+        "the step must report a timeout, got: {error}"
+    );
+    let message = error["message"]
+        .as_str()
+        .expect("a timeout carries a message");
     assert!(
-        elapsed < std::time::Duration::from_secs(20),
-        "the run must stop soon after the timeout, took {elapsed:?}"
+        message.contains(&format!("did not finish within {TIMEOUT_MS} ms")),
+        "the message must name the timeout that expired, got: {message}"
+    );
+    assert!(
+        message.contains(ta()),
+        "the message must name the program that was killed, got: {message}"
+    );
+    // The timeout cannot fire sooner than the limit it measures, so this lower
+    // bound holds however slow the machine is.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(TIMEOUT_MS),
+        "the step must wait for its timeout, took {elapsed:?}"
     );
 }
 
