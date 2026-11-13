@@ -622,9 +622,9 @@ cmd /c "ta --output json run cases/ > out.json"
 ```
 
 `Set-Content -Encoding utf8` is no better in that version: it adds a byte order
-mark (`EF BB BF`) at the start of the file. Redirect with PowerShell itself and
-check the first bytes afterwards; `7B`, the `{` of the object, is what a usable
-JSON file starts with:
+mark (`EF BB BF`) at the start of the file. To check a captured file, look at
+its first bytes; `7B`, the `{` of the object, is what a usable JSON file starts
+with:
 
 ```powershell
 Format-Hex -Path out.json | Select-Object -First 1
