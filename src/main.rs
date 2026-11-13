@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde_json::json;
+use test_anything::core::bundle::{self, FailureBundles};
 use test_anything::core::case::{self, CaseError};
 use test_anything::core::events::EventBus;
 use test_anything::core::output::{self, Format};
@@ -50,6 +51,15 @@ enum Command {
         /// Case files or directories to run.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
+        /// Overrides a case variable. Repeat for more than one.
+        #[arg(long = "var", value_name = "NAME=VALUE", value_parser = parse_var)]
+        vars: Vec<(String, String)>,
+        /// Directory that receives one subdirectory per failed case.
+        #[arg(long, value_name = "DIRECTORY")]
+        bundle_dir: Option<PathBuf>,
+        /// Do not write failure bundles.
+        #[arg(long)]
+        no_bundle: bool,
     },
     /// Validate case files without running them.
     Lint {
@@ -59,6 +69,19 @@ enum Command {
     },
     /// Print the JSON Schema for the case file format.
     Schema,
+}
+
+/// Splits a `--var name=value` argument.
+fn parse_var(text: &str) -> Result<(String, String), String> {
+    let Some((name, value)) = text.split_once('=') else {
+        return Err(format!("`{text}` has no `=`; write `--var name=value`"));
+    };
+    if name.is_empty() {
+        return Err(format!(
+            "the name is empty in `{text}`; write `--var name=value`"
+        ));
+    }
+    Ok((name.to_string(), value.to_string()))
 }
 
 fn main() -> ExitCode {
@@ -71,14 +94,26 @@ fn main() -> ExitCode {
     }
 
     match cli.command {
-        Command::Run { paths } => run(&paths, cli.output, &registry),
+        Command::Run {
+            paths,
+            vars,
+            bundle_dir,
+            no_bundle,
+        } => run(&paths, cli.output, &registry, &vars, bundle_dir, no_bundle),
         Command::Lint { .. } => not_implemented("lint", cli.output),
         Command::Schema => not_implemented("schema", cli.output),
     }
 }
 
-fn run(paths: &[PathBuf], format: OutputFormat, registry: &Registry) -> ExitCode {
-    let outcome = execute(paths, registry);
+fn run(
+    paths: &[PathBuf],
+    format: OutputFormat,
+    registry: &Registry,
+    vars: &[(String, String)],
+    bundle_dir: Option<PathBuf>,
+    no_bundle: bool,
+) -> ExitCode {
+    let outcome = execute(paths, registry, vars, bundle_dir, no_bundle);
     let rendered = output::render(&outcome, format.into());
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
@@ -88,7 +123,13 @@ fn run(paths: &[PathBuf], format: OutputFormat, registry: &Registry) -> ExitCode
     outcome.exit_code().into()
 }
 
-fn execute(paths: &[PathBuf], registry: &Registry) -> RunOutcome {
+fn execute(
+    paths: &[PathBuf],
+    registry: &Registry,
+    vars: &[(String, String)],
+    bundle_dir: Option<PathBuf>,
+    no_bundle: bool,
+) -> RunOutcome {
     let files = match case::discover(paths) {
         Ok(files) => files,
         Err(error) => {
@@ -110,7 +151,14 @@ fn execute(paths: &[PathBuf], registry: &Registry) -> RunOutcome {
     let mut errors = Vec::new();
     for file in files {
         match case::load_file(&file) {
-            Ok(loaded_case) => loaded.push(loaded_case),
+            Ok(mut loaded_case) => {
+                // Command-line variables beat the ones in the case file, and
+                // beat nothing else: a case that does not use the name ignores it.
+                for (name, value) in vars {
+                    loaded_case.case.vars.insert(name.clone(), value.clone());
+                }
+                loaded.push(loaded_case);
+            }
             Err(error) => errors.push(error),
         }
     }
@@ -118,8 +166,16 @@ fn execute(paths: &[PathBuf], registry: &Registry) -> RunOutcome {
         return RunOutcome::Rejected { errors };
     }
 
+    let mut bundles = if no_bundle {
+        None
+    } else {
+        Some(FailureBundles::new(
+            bundle_dir.unwrap_or_else(|| PathBuf::from(bundle::DEFAULT_DIRECTORY)),
+        ))
+    };
+
     let bus = EventBus::new();
-    runner::run(&loaded, registry, &bus)
+    runner::run(&loaded, registry, &bus, bundles.as_mut())
 }
 
 fn not_implemented(name: &str, format: OutputFormat) -> ExitCode {

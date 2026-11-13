@@ -1,0 +1,10 @@
+name: An invalid case exits three
+steps:
+  - cli.run:
+      command: ${ta}
+      args: [run, tests/self/fixtures/invalid.case]
+    expect:
+      - path: $.exit_code
+        equals: 3
+      - path: $.stderr
+        contains: "typo"

@@ -1,0 +1,10 @@
+name: A malformed --var is a usage error
+steps:
+  - cli.run:
+      command: ${ta}
+      args: [run, tests/self/fixtures/passing.case, --var, novalue]
+    expect:
+      - path: $.exit_code
+        equals: 2
+      - path: $.stderr
+        contains: "--var name=value"

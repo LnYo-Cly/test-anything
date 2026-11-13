@@ -1,0 +1,4 @@
+name: Invalid fixture
+typo: true
+steps:
+  - ta.noop: {}

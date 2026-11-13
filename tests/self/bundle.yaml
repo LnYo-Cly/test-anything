@@ -1,0 +1,23 @@
+name: A failing case leaves a failure bundle another run can use
+vars:
+  # Overridden by the test driver, which needs a directory it can inspect.
+  bundles: .ta/failures
+steps:
+  - cli.run:
+      command: ${ta}
+      args: [--output, json, run, tests/self/fixtures/failing.case, --bundle-dir, "${bundles}", --var, "ta=${ta}"]
+    expect:
+      - path: $.exit_code
+        equals: 1
+      - path: $.json.cases[0].bundle
+        exists: true
+    save:
+      bundle: $.json.cases[0].bundle
+  - cli.run:
+      command: ${ta}
+      args: [run, "${bundle}", --no-bundle, --var, "ta=${ta}"]
+    expect:
+      - path: $.exit_code
+        equals: 1
+      - path: $.stdout
+        contains: "FAIL"

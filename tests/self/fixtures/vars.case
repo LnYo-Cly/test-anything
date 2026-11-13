@@ -1,0 +1,10 @@
+name: Variable fixture
+vars:
+  target: does-not-exist.yaml
+steps:
+  - cli.run:
+      command: ${ta}
+      args: ["run", "${target}", "--var", "ta=${ta}"]
+    expect:
+      - path: $.exit_code
+        equals: 0

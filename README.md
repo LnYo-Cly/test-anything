@@ -2,11 +2,12 @@
 
 An agent-friendly, cross-layer testing tool written in Rust.
 
-`ta` is a single binary that runs declarative test cases against HTTP APIs and,
-later, command-line targets, and reports results in a form that both people and
-coding agents can read. Status: early development. `ta run` executes YAML cases
-with the built-in `http.request` step; `ta lint` and `ta schema` are not
-implemented yet and exit with code 9.
+`ta` is a single binary that runs declarative test cases against HTTP APIs and
+command-line programs, and reports results in a form that both people and coding
+agents can read. Status: early development. `ta run` executes YAML cases with
+the built-in `http.request` and `cli.run` steps, writes a failure bundle when a
+case does not pass, and describes every run as text or JSON; `ta lint` and
+`ta schema` are not implemented yet and exit with code 9.
 
 ## Install
 
@@ -21,8 +22,10 @@ cargo build
 ```
 
 The binary is written to `target/debug/ta` (`target\debug\ta.exe` on Windows).
-The `http` feature, which provides the `http.request` step, is enabled by
-default. Build without any driver with `--no-default-features`.
+The `http` feature provides the `http.request` step and the `cli` feature
+provides the `cli.run` step; both are enabled by default. Build a subset with
+`--no-default-features --features cli`, or no driver at all with
+`--no-default-features`.
 
 ## Test
 
@@ -36,11 +39,36 @@ cargo test
 The integration tests in `tests/cli.rs` run the compiled binary against a local
 HTTP server that each test starts itself. They never reach the network.
 
+### Self-test suite
+
+`tests/self/*.yaml` are cases that test `ta` with `ta`: every step is a
+`cli.run` that starts the binary under test. `tests/self_suite.rs` runs them with
+the compiled binary, so the existing `cargo test` covers them on Linux, macOS and
+Windows without a separate CI job:
+
+```sh
+cargo test --test self_suite
+ta run tests/self --var ta=target/debug/ta    # the same suite, by hand
+```
+
+`--var ta=<path>` tells every case which binary to start. The cases that the
+suite calls are fixtures in `tests/self/fixtures/`; they use the `.case`
+extension so that the recursive directory scan of `tests/self` does not pick
+them up as tests. Run one explicitly, `ta run tests/self/fixtures/passing.case`,
+to see what it does. The fixtures use `ta` itself as the program under test, so
+the suite needs neither the network nor a system command such as `echo` or
+`sleep`. One case runs a case that is meant to fail, so a manual run writes a
+failure bundle under `.ta/failures`, which git ignores; add
+`--var bundles=<directory>` to put it somewhere else.
+
 ## Usage
 
 ```sh
 ta run cases/login.yaml
 ta run cases/
+ta run cases/ --var token=abc --var user=alice
+ta run cases/ --bundle-dir /tmp/ta-failures
+ta run cases/ --no-bundle
 ta --output json run cases/
 ta lint cases/        # not implemented yet
 ta schema             # not implemented yet
@@ -52,6 +80,13 @@ step is validated before the first case runs: if anything is invalid, no case
 runs and the exit code is 3. A step that fails an assertion stops its own case;
 the remaining steps of that case are reported as skipped and the other cases
 still run.
+
+`--var name=value` defines a variable for every case of the run and may be
+repeated. It overrides a variable of the same name in the case's `vars:`. A
+`--var` without `=` or with an empty name is a usage error (exit 2).
+
+`--bundle-dir <directory>` changes where failure bundles are written (see
+[Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
 
 ## Case files
 
@@ -92,7 +127,9 @@ not match the step's schema and undefined variables are all case errors.
 step result into a variable. A later step argument can use any defined variable
 as `${name}`. Substitution is textual and only happens inside strings, so a
 variable may not change the type of a value. Referencing a variable that is
-neither in `vars:` nor saved by an earlier step is a case error.
+neither in `vars:` nor saved by an earlier step is a case error. `--var
+name=value` on the command line defines a variable for every case and overrides
+the same name in `vars:`.
 
 ### Assertions
 
@@ -130,6 +167,96 @@ string. A non-2xx status is not an error: it is part of the result and is judged
 by assertions. A refused connection or an unresolvable host is an environment
 error; exceeding `timeout_ms` is a timeout.
 
+### `cli.run`
+
+Runs a program without a shell and returns how it ended and what it wrote.
+
+| Argument | Meaning |
+| --- | --- |
+| `command` | Program name or path. Required. A relative path is resolved against the working directory of `ta`. |
+| `args` | List of arguments, one per entry. Nothing is quoted, expanded or split. |
+| `cwd` | Working directory of the program. Defaults to the working directory of `ta`. |
+| `env` | Variables added to the inherited environment, replacing names that are already set. |
+| `stdin` | Text written to the program's standard input. Without it the input is empty. |
+| `timeout_ms` | Timeout for the whole run. Defaults to `30000`. |
+
+The result is an object with `exit_code`, `stdout` and `stderr`, plus `json` when
+standard output is JSON:
+
+```yaml
+steps:
+  - cli.run:
+      command: git
+      args: ["rev-parse", "--short", "HEAD"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.stderr
+        equals: ""
+      - path: $.json
+        exists: false
+```
+
+A non-zero exit code is not an error: it is part of the result and is judged by
+assertions. `exit_code` is `null` when the program was killed by a signal.
+Standard output and standard error are decoded as UTF-8, lossily. `json` is only
+present when standard output without surrounding whitespace parses as JSON, so a
+case can test it with `exists`.
+
+The arguments are passed to `std::process::Command` directly, so shell syntax
+such as quotes, `|` or `&&` does not apply. Run a shell explicitly when a case
+needs one, for example `command: sh, args: ["-c", "..."]`. A relative `command`
+and `cwd` are resolved against the working directory of the `ta` process, not
+against the case file.
+
+A program that cannot be started is an environment error (exit 4) whose message
+names it and says what to check. When `timeout_ms` expires the program is killed
+and the step is a timeout (exit 5). Both pipes are read on their own threads, so
+a program that writes more than a pipe buffer cannot deadlock the run; after the
+program ends `ta` waits at most one second for the pipes to close, so a process
+the program left behind cannot hang it.
+
+## Failure bundles
+
+Terminal output is truncated and gone after the run, so every case that does not
+pass also leaves a directory that an agent can read afterwards:
+
+```text
+.ta/failures/
+└── 1763000000123-4242/                run id: Unix milliseconds and process id
+    ├── 0-wrong-exit-code/
+    │   ├── case.yaml                  copy of the case file
+    │   ├── report.json                the case as `--output json` shows it
+    │   └── meta.json                  written last
+    └── 1-login-returns-a-token/
+        └── (the same three files)
+```
+
+`meta.json` holds at least these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Version of the layout, currently `1`. |
+| `ta_version` | Version of `ta` that wrote the bundle. |
+| `case_file` | Case file as given on the command line. |
+| `case_name` | Name of the case. |
+| `status` | `failed` or `error`. |
+| `created_at` | Unix milliseconds. |
+
+A case directory is staged under `.tmp-…` in the same parent, renamed into
+place, and only then does `meta.json` appear. **A directory without `meta.json`
+is incomplete and must be ignored**, including one left by an interrupted run.
+
+The default directory is `.ta/failures` relative to the working directory of
+`ta`. `--bundle-dir <directory>` replaces it and `--no-bundle` turns bundles off.
+A run where every case passes creates nothing. When a bundle cannot be written,
+the exit code of the run does not change: the problem is reported on standard
+error and in the `bundle_errors` list of `--output json`.
+
+> A bundle contains the arguments and results of every step, which may include
+> credentials. Keep the bundle directory out of version control; `.ta/` is in
+> this repository's `.gitignore`.
+
 ## Output
 
 `--output text` (the default) writes one line per case to standard output, lists
@@ -140,6 +267,7 @@ with a summary line:
 FAIL cases/login.yaml [Login returns a token] 6 ms
   http.request: 1 of 2 assertions failed
     $.status equals 201 (actual 200)
+  bundle: .ta/failures/1763000000123-4242/0-login-returns-a-token
 Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 7 ms
 ```
 
@@ -166,6 +294,7 @@ Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 e
       "name": "Login returns a token",
       "status": "failed",
       "duration_ms": 6,
+      "bundle": ".ta/failures/1763000000123-4242/0-login-returns-a-token",
       "error": { "kind": "assertion", "message": "1 of 2 assertions failed" },
       "steps": [
         {
@@ -182,9 +311,14 @@ Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 e
       ]
     }
   ],
-  "errors": []
+  "errors": [],
+  "bundle_errors": []
 }
 ```
+
+`bundle` is the directory of the case's failure bundle, or `null` when the case
+passed or bundles are off. `bundle_errors` lists the bundles that could not be
+written; they never change the exit code.
 
 When no case can run, `cases` is empty and `errors` lists one entry per invalid
 file, with `file`, `message` and `kind`. Diagnostics never go to standard output.
