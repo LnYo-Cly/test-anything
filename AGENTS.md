@@ -84,3 +84,10 @@ Follow project governance standards during delivery and collaboration:
 ## Repository Specifics
 
 Repository-specific rules may be added here after explicit diagnosis; the deterministic base and vertical overlay above remain unchanged.
+
+### test-anything rules
+
+- Follow [CONTRIBUTING.md](CONTRIBUTING.md): commit and pull request format, project structure, code rules, tests and dependency policy. It is the authority for repository conventions.
+- Before adding a dependency, search crates.io, lib.rs and GitHub and record the comparison as CONTRIBUTING.md requires. If you cannot search, stop and report which library you need and why.
+- For a task-bound delivery, write the pull request description to `artifacts/pr-body.md` in the task package, using the bilingual sections from `.github/PULL_REQUEST_TEMPLATE.md`. The description is published as written, so it must not contain local paths, user names, machine names or secrets.
+- On this project, build and test on Windows with the GNU toolchain when the MSVC linker is unavailable; CI covers MSVC, Linux and macOS.

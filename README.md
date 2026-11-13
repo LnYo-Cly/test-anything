@@ -63,6 +63,10 @@ JSON object to standard output:
 Codes 0, 2, and 9 are the only ones currently produced; the rest are reserved
 for the features that follow.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) ([简体中文](CONTRIBUTING.zh-CN.md)) for the commit and pull request format, project structure, code rules and dependency policy.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
