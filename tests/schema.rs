@@ -634,6 +634,11 @@ fn the_schema_accepts_every_valid_repository_case() {
         let text = fs::read_to_string(&file).expect("the self case must be readable");
         let instance: Value =
             serde_saphyr::from_str(&text).expect("the self case must be valid YAML");
+        // A build without the observer cannot describe a case that declares
+        // one; the case itself is still checked by every build that has it.
+        if instance.get("observe").is_some() && !describes_observations(schema()) {
+            continue;
+        }
         assert!(
             validator.is_valid(&instance),
             "the schema rejected the valid self case {}",
@@ -663,6 +668,12 @@ fn the_schema_accepts_every_valid_repository_case() {
     }
 }
 
+/// Whether this build can describe an observation at all.
+#[cfg(feature = "cli")]
+fn describes_observations(schema: &Value) -> bool {
+    schema["properties"]["observe"]["additionalProperties"] != Value::Bool(false)
+}
+
 #[cfg(all(feature = "http", feature = "cli"))]
 #[test]
 fn the_schema_accepts_every_case_example_in_the_docs() {
@@ -679,6 +690,11 @@ fn the_schema_accepts_every_case_example_in_the_docs() {
             );
             let instance: Value =
                 serde_saphyr::from_str(example).expect("the example must be valid YAML");
+            // A build without the observer cannot describe an example that
+            // declares one; every build that has the observer checks it.
+            if instance.get("observe").is_some() && !describes_observations(schema()) {
+                continue;
+            }
             assert!(
                 validator.is_valid(&instance),
                 "the schema rejected an example in {doc}:
@@ -728,13 +744,17 @@ fn the_schema_is_valid_when_no_step_is_registered() {
         Value::Bool(false),
         "without registered steps no step item can be valid"
     );
-    assert_eq!(
-        schema["$defs"]
-            .as_object()
-            .expect("$defs must be an object")
-            .len(),
-        2,
-        "a build without steps keeps only the shared assertion and save definitions"
+    let definitions = schema["$defs"]
+        .as_object()
+        .expect("$defs must be an object");
+    assert!(
+        definitions.contains_key("expect") && definitions.contains_key("save"),
+        "a build without steps keeps the shared assertion and save definitions"
+    );
+    assert!(
+        !definitions.contains_key("cli.run") && !definitions.contains_key("http.request"),
+        "a build without steps must not describe a step: {:?}",
+        definitions.keys().collect::<Vec<_>>()
     );
     jsonschema::meta::validate(schema).expect("the no-driver schema must be a valid schema");
 

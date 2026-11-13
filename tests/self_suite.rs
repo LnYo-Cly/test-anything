@@ -6,19 +6,22 @@
 
 mod support;
 
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 use std::fs;
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 use std::path::{Path, PathBuf};
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 use std::process::Command;
 
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 use serde_json::Value;
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 use support::TempDir;
 
-#[cfg(feature = "cli")]
+/// Runs the whole suite, which needs both the `cli` driver and the `log`
+/// observer: a case that declares an observation is validated even when it is
+/// filtered out, so a build without the observer cannot run the directory.
+#[cfg(all(feature = "cli", feature = "log"))]
 #[test]
 fn the_self_suite_passes() {
     let ta = env!("CARGO_BIN_EXE_ta");
@@ -75,7 +78,7 @@ fn the_self_suite_passes() {
 }
 
 /// Every file called `name` anywhere below `dir`.
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "log"))]
 fn files_named(dir: &Path, name: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {

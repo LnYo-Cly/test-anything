@@ -8,8 +8,9 @@
 // The whole file needs the built-in log observer; a build without it compiles
 // an empty test target.
 #![cfg(feature = "log")]
-// Every test is gated on the driver and features it needs.
-#![allow(dead_code)]
+// Every test is gated on the driver and features it needs, so a build with the
+// observer but without a driver uses a subset of the helpers below.
+#![allow(dead_code, unused_imports)]
 
 mod support;
 

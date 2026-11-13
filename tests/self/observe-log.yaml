@@ -1,0 +1,36 @@
+name: A step's log lines are observed and asserted
+vars:
+  # `git` is the one program a checkout of this repository is guaranteed to
+  # have. `git config --file` appends to a chosen file without a shell, so the
+  # case writes a real log line on Linux, macOS and Windows alike. The file it
+  # writes is ignored by `tests/self/.gitignore`.
+  log: tests/self/observed.log
+observe:
+  app_log:
+    log.file:
+      path: ${log}
+steps:
+  # Nothing writes to the log during this step, so the observation is empty
+  # even when an earlier run left the file behind.
+  - cli.run:
+      command: ${ta}
+      args: ["--version"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.observed.app_log.lines
+        equals: []
+  - cli.run:
+      command: git
+      args: ["config", "--file", "${log}", "--add", "ta.line", "order created"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.observed.app_log.truncated
+        equals: false
+      - path: $.observed.app_log.text
+        contains: "order created"
+      # The line git appends, whether it starts a new section or joins the one
+      # an earlier run of this case left behind.
+      - path: $.observed.app_log.lines
+        contains: "\tline = order created"
