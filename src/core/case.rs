@@ -1,12 +1,15 @@
 //! Case files: the YAML model, loading, discovery and variable substitution.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::core::paths;
 use jsonpath_rust::JsonPath;
-use serde::Deserialize;
+use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
+use serde_saphyr::{CroppedRegion, Error, Location, Options, Spanned};
 
 /// A test case as written in a case file.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,65 +117,279 @@ pub struct CaseError {
 struct RawCase {
     name: String,
     #[serde(default)]
-    vars: BTreeMap<String, Value>,
+    vars: BTreeMap<String, Spanned<Value>>,
     project: Option<String>,
     suite: Option<String>,
     layer: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
-    steps: Vec<Map<String, Value>>,
+    steps: Vec<Spanned<RawStep>>,
+}
+
+/// One step as written, with the location of every part a structural error can
+/// name.
+#[derive(Debug)]
+struct RawStep {
+    /// Keys other than `expect` and `save`, each with its value. A valid step
+    /// has exactly one: the step name.
+    fields: Vec<(String, Spanned<Value>)>,
+    /// The `expect` value, if the step has one.
+    expect: Option<Spanned<RawNodes>>,
+    /// The `save` value, if the step has one.
+    save: Option<Spanned<RawNodes>>,
+}
+
+impl<'de> Deserialize<'de> for RawStep {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StepVisitor;
+
+        impl<'de> Visitor<'de> for StepVisitor {
+            type Value = RawStep;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a step mapping with one step name")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<RawStep, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut fields = Vec::new();
+                let mut expect = None;
+                let mut save = None;
+                // The step name is chosen by the case, so the value type of each
+                // key is decided here rather than by a struct: `expect` and
+                // `save` must keep the location of every entry they contain.
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "expect" => expect = Some(map.next_value()?),
+                        "save" => save = Some(map.next_value()?),
+                        _ => fields.push((key, map.next_value()?)),
+                    }
+                }
+                Ok(RawStep {
+                    fields,
+                    expect,
+                    save,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(StepVisitor)
+    }
+}
+
+/// A raw `expect` or `save` value.
+#[derive(Debug)]
+enum RawNodes {
+    /// A list, with the location of every entry.
+    List(Vec<Spanned<Value>>),
+    /// A mapping, with the location of every value.
+    Map(Vec<(String, Spanned<Value>)>),
+    /// Anything else, kept as the kind of value that was found.
+    Other(&'static str),
+}
+
+impl RawNodes {
+    /// The kind of value, for an error message.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::List(_) => "a list",
+            Self::Map(_) => "a mapping",
+            Self::Other(kind) => kind,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawNodes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct NodesVisitor;
+
+        impl<'de> Visitor<'de> for NodesVisitor {
+            type Value = RawNodes;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a list or a mapping")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<RawNodes, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<Spanned<Value>>()? {
+                    items.push(item);
+                }
+                Ok(RawNodes::List(items))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<RawNodes, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    entries.push((key, map.next_value::<Spanned<Value>>()?));
+                }
+                Ok(RawNodes::Map(entries))
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a boolean"))
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a number"))
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a number"))
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a number"))
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a string"))
+            }
+
+            fn visit_string<E>(self, _: String) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("a string"))
+            }
+
+            fn visit_unit<E>(self) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("null"))
+            }
+
+            fn visit_none<E>(self) -> Result<RawNodes, E> {
+                Ok(RawNodes::Other("null"))
+            }
+        }
+
+        deserializer.deserialize_any(NodesVisitor)
+    }
+}
+
+/// A structural problem in a case file together with the node it belongs to.
+#[derive(Debug)]
+struct Problem {
+    /// Where the offending node starts.
+    location: Location,
+    /// What is wrong.
+    message: String,
+}
+
+impl Problem {
+    /// Renders the problem the way the YAML parser reports a grammar error: a
+    /// `line L column C:` prefix and a source snippet with a caret line.
+    ///
+    /// The parser already renders that layout, so a structural error reuses its
+    /// renderer rather than keeping a second copy of the format.
+    fn render(self, text: &str) -> String {
+        let options = Options::default();
+        let error = Error::WithSnippet {
+            regions: vec![CroppedRegion::new(
+                text,
+                "<input>",
+                1,
+                text.lines().count(),
+                self.location,
+            )],
+            crop_radius: options.crop_radius,
+            error: Box::new(Error::Message {
+                msg: self.message,
+                location: self.location,
+            }),
+        };
+        strip_error_prefix(&error.to_string())
+    }
+}
+
+/// Drops the `error: ` prefix the YAML parser puts on its messages.
+///
+/// The caller prints its own prefix, so keeping the parser's would duplicate it.
+fn strip_error_prefix(message: &str) -> String {
+    message
+        .strip_prefix("error: ")
+        .unwrap_or(message)
+        .to_string()
 }
 
 /// Parses one case file's text.
 ///
-/// Grammar errors carry the location reported by the YAML parser; semantic
-/// errors name the step and the field they belong to.
+/// Errors carry the location of the node they belong to: the one the YAML
+/// parser reports for a grammar error, and the one of the offending step,
+/// assertion or `save` entry for a structural error.
 pub fn parse(text: &str) -> Result<Case, String> {
-    let raw: RawCase = serde_saphyr::from_str(text).map_err(|error| {
-        let message = error.to_string();
-        // The YAML parser prefixes its own message with `error: `; the caller
-        // already prints one.
-        message
-            .strip_prefix("error: ")
-            .unwrap_or(&message)
-            .to_string()
-    })?;
+    let raw: Spanned<RawCase> =
+        serde_saphyr::from_str(text).map_err(|error| strip_error_prefix(&error.to_string()))?;
+    build_case(raw).map_err(|problem| problem.render(text))
+}
 
-    let mut vars = BTreeMap::new();
-    for (name, value) in raw.vars {
-        let text = match value {
+/// Turns the raw document into a case, adding the location to every problem.
+fn build_case(raw: Spanned<RawCase>) -> Result<Case, Problem> {
+    // Problems without a more precise node point at the document itself.
+    let document = raw.referenced;
+    let RawCase {
+        name,
+        vars,
+        project,
+        suite,
+        layer,
+        tags,
+        steps: raw_steps,
+    } = raw.value;
+
+    let mut expanded = BTreeMap::new();
+    for (name, value) in vars {
+        let location = value.referenced;
+        let text = match value.value {
             Value::String(text) => text,
             Value::Number(number) => number.to_string(),
             Value::Bool(flag) => flag.to_string(),
             Value::Null => {
-                return Err(format!(
-                    "variable `{name}` has no value; use a string, number or boolean"
-                ));
+                return Err(Problem {
+                    location,
+                    message: format!(
+                        "variable `{name}` has no value; use a string, number or boolean"
+                    ),
+                });
             }
             Value::Array(_) | Value::Object(_) => {
-                return Err(format!(
-                    "variable `{name}` must be a string, number or boolean"
-                ));
+                return Err(Problem {
+                    location,
+                    message: format!("variable `{name}` must be a string, number or boolean"),
+                });
             }
         };
-        vars.insert(name, text);
+        expanded.insert(name, text);
     }
 
-    let mut steps = Vec::with_capacity(raw.steps.len());
-    for (index, step) in raw.steps.into_iter().enumerate() {
+    let mut steps = Vec::with_capacity(raw_steps.len());
+    for (index, step) in raw_steps.into_iter().enumerate() {
         steps.push(parse_step(index + 1, step)?);
     }
     if steps.is_empty() {
-        return Err("the case has no steps; add at least one step under `steps`".to_string());
+        return Err(Problem {
+            location: document,
+            message: "the case has no steps; add at least one step under `steps`".to_string(),
+        });
     }
 
     Ok(Case {
-        name: raw.name,
-        vars,
-        project: classification(raw.project, "project")?,
-        suite: classification(raw.suite, "suite")?,
-        layer: classification(raw.layer, "layer")?,
-        tags: classification_tags(raw.tags)?,
+        name,
+        vars: expanded,
+        project: classification(project, "project", document)?,
+        suite: classification(suite, "suite", document)?,
+        layer: classification(layer, "layer", document)?,
+        tags: classification_tags(tags, document)?,
         steps,
     })
 }
@@ -181,107 +398,151 @@ pub fn parse(text: &str) -> Result<Case, String> {
 ///
 /// A value is used as written and never interpolated, so an empty value is
 /// always a mistake rather than a reference to a variable.
-fn classification(value: Option<String>, field: &str) -> Result<Option<String>, String> {
+fn classification(
+    value: Option<String>,
+    field: &str,
+    location: Location,
+) -> Result<Option<String>, Problem> {
     match value {
         None => Ok(None),
-        Some(text) if text.trim().is_empty() => Err(format!(
-            "`{field}` is empty; give it a value or remove the field"
-        )),
+        Some(text) if text.trim().is_empty() => Err(Problem {
+            location,
+            message: format!("`{field}` is empty; give it a value or remove the field"),
+        }),
         Some(text) => Ok(Some(text)),
     }
 }
 
 /// Checks the tag list: every tag needs a value and may appear only once.
-fn classification_tags(tags: Vec<String>) -> Result<Vec<String>, String> {
+fn classification_tags(tags: Vec<String>, location: Location) -> Result<Vec<String>, Problem> {
     let mut seen = BTreeSet::new();
     for tag in &tags {
         if tag.trim().is_empty() {
-            return Err("`tags` contains an empty tag; give it a value or remove it".to_string());
+            return Err(Problem {
+                location,
+                message: "`tags` contains an empty tag; give it a value or remove it".to_string(),
+            });
         }
         if !seen.insert(tag.as_str()) {
-            return Err(format!("`tags` contains `{tag}` twice; keep each tag once"));
+            return Err(Problem {
+                location,
+                message: format!("`tags` contains `{tag}` twice; keep each tag once"),
+            });
         }
     }
     Ok(tags)
 }
 
-fn parse_step(index: usize, mut map: Map<String, Value>) -> Result<Step, String> {
-    let expect = map.remove("expect");
-    let save = map.remove("save");
+fn parse_step(index: usize, step: Spanned<RawStep>) -> Result<Step, Problem> {
+    let location = step.referenced;
+    let RawStep {
+        mut fields,
+        expect,
+        save,
+    } = step.value;
 
-    let (action, args) = match map.len() {
-        1 => map
-            .into_iter()
-            .next()
-            .ok_or_else(|| format!("step {index}: expected one step name"))?,
-        0 => {
-            return Err(format!(
-                "step {index}: expected one step name such as `sample.call`, found none"
-            ));
+    let (action, args) = match fields.len() {
+        1 => {
+            let Some((action, args)) = fields.pop() else {
+                return Err(Problem {
+                    location,
+                    message: format!("step {index}: expected one step name"),
+                });
+            };
+            (action, args)
         }
-        _ => {
-            let names: Vec<String> = map.keys().cloned().collect();
-            return Err(format!(
-                "step {index}: expected exactly one step name, found {}: {}",
-                names.len(),
-                names.join(", ")
-            ));
+        0 => {
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {index}: expected one step name such as `sample.call`, found none"
+                ),
+            });
+        }
+        count => {
+            let names: Vec<String> = fields.into_iter().map(|(name, _)| name).collect();
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {index}: expected exactly one step name, found {count}: {}",
+                    names.join(", ")
+                ),
+            });
         }
     };
 
-    if !args.is_object() {
-        return Err(format!(
-            "step {index}: `{action}` takes a mapping of arguments, found {}",
-            kind_name(&args)
-        ));
+    if !args.value.is_object() {
+        return Err(Problem {
+            location: args.referenced,
+            message: format!(
+                "step {index}: `{action}` takes a mapping of arguments, found {}",
+                kind_name(&args.value)
+            ),
+        });
     }
 
     let expect = match expect {
         None => Vec::new(),
-        Some(Value::Array(items)) => {
-            let mut expectations = Vec::with_capacity(items.len());
-            for (position, item) in items.iter().enumerate() {
-                expectations.push(parse_expectation(index, position + 1, item)?);
+        Some(node) => match node.value {
+            RawNodes::List(items) => {
+                let mut expectations = Vec::with_capacity(items.len());
+                for (position, item) in items.iter().enumerate() {
+                    expectations.push(parse_expectation(index, position + 1, item)?);
+                }
+                expectations
             }
-            expectations
-        }
-        Some(other) => {
-            return Err(format!(
-                "step {index}: `expect` must be a list of assertions, found {}",
-                kind_name(&other)
-            ));
-        }
+            other => {
+                return Err(Problem {
+                    location: node.referenced,
+                    message: format!(
+                        "step {index}: `expect` must be a list of assertions, found {}",
+                        other.kind()
+                    ),
+                });
+            }
+        },
     };
 
     let save = match save {
         None => Vec::new(),
-        Some(Value::Object(entries)) => {
-            let mut saved = Vec::with_capacity(entries.len());
-            for (name, value) in entries {
-                let Value::String(path) = value else {
-                    return Err(format!(
-                        "step {index}: the `save` path for `{name}` must be a string, found {}",
-                        kind_name(&value)
-                    ));
-                };
-                validate_path(&path).map_err(|message| {
-                    format!("step {index}: the `save` path for `{name}` is invalid: {message}")
-                })?;
-                saved.push(SavedValue { name, path });
+        Some(node) => match node.value {
+            RawNodes::Map(entries) => {
+                let mut saved = Vec::with_capacity(entries.len());
+                for (name, value) in entries {
+                    let Value::String(path) = value.value else {
+                        return Err(Problem {
+                            location: value.referenced,
+                            message: format!(
+                                "step {index}: the `save` path for `{name}` must be a string, found {}",
+                                kind_name(&value.value)
+                            ),
+                        });
+                    };
+                    validate_path(&path).map_err(|message| Problem {
+                        location: value.referenced,
+                        message: format!(
+                            "step {index}: the `save` path for `{name}` is invalid: {message}"
+                        ),
+                    })?;
+                    saved.push(SavedValue { name, path });
+                }
+                saved
             }
-            saved
-        }
-        Some(other) => {
-            return Err(format!(
-                "step {index}: `save` must be a mapping of variable names to JSON paths, found {}",
-                kind_name(&other)
-            ));
-        }
+            other => {
+                return Err(Problem {
+                    location: node.referenced,
+                    message: format!(
+                        "step {index}: `save` must be a mapping of variable names to JSON paths, found {}",
+                        other.kind()
+                    ),
+                });
+            }
+        },
     };
 
     Ok(Step {
         action,
-        args,
+        args: args.value,
         expect,
         save,
     })
@@ -289,31 +550,46 @@ fn parse_step(index: usize, mut map: Map<String, Value>) -> Result<Step, String>
 
 const COMPARISONS: [&str; 4] = ["equals", "not_equals", "contains", "exists"];
 
-fn parse_expectation(step: usize, position: usize, value: &Value) -> Result<Expectation, String> {
-    let Value::Object(entries) = value else {
-        return Err(format!(
-            "step {step}: assertion {position} must be a mapping with `path` and one comparison, found {}",
-            kind_name(value)
-        ));
+fn parse_expectation(
+    step: usize,
+    position: usize,
+    item: &Spanned<Value>,
+) -> Result<Expectation, Problem> {
+    let location = item.referenced;
+    let Value::Object(entries) = &item.value else {
+        return Err(Problem {
+            location,
+            message: format!(
+                "step {step}: assertion {position} must be a mapping with `path` and one comparison, found {}",
+                kind_name(&item.value)
+            ),
+        });
     };
     let mut entries = entries.clone();
 
     let path = match entries.remove("path") {
         Some(Value::String(path)) => path,
         Some(other) => {
-            return Err(format!(
-                "step {step}: assertion {position}: `path` must be a string, found {}",
-                kind_name(&other)
-            ));
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {step}: assertion {position}: `path` must be a string, found {}",
+                    kind_name(&other)
+                ),
+            });
         }
         None => {
-            return Err(format!(
-                "step {step}: assertion {position}: `path` is required"
-            ));
+            return Err(Problem {
+                location,
+                message: format!("step {step}: assertion {position}: `path` is required"),
+            });
         }
     };
-    validate_path(&path).map_err(|message| {
-        format!("step {step}: assertion {position}: `{path}` is not a valid JSON path: {message}")
+    validate_path(&path).map_err(|message| Problem {
+        location,
+        message: format!(
+            "step {step}: assertion {position}: `{path}` is not a valid JSON path: {message}"
+        ),
     })?;
 
     let mut found = Vec::new();
@@ -324,26 +600,35 @@ fn parse_expectation(step: usize, position: usize, value: &Value) -> Result<Expe
     }
     if !entries.is_empty() {
         let unknown: Vec<String> = entries.keys().cloned().collect();
-        return Err(format!(
-            "step {step}: assertion {position}: unknown field(s) {}; use one of {}",
-            unknown.join(", "),
-            COMPARISONS.join(", ")
-        ));
+        return Err(Problem {
+            location,
+            message: format!(
+                "step {step}: assertion {position}: unknown field(s) {}; use one of {}",
+                unknown.join(", "),
+                COMPARISONS.join(", ")
+            ),
+        });
     }
     let (comparison, expected) = match found.len() {
         0 => {
-            return Err(format!(
-                "step {step}: assertion {position}: expected one of {}",
-                COMPARISONS.join(", ")
-            ));
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {step}: assertion {position}: expected one of {}",
+                    COMPARISONS.join(", ")
+                ),
+            });
         }
         1 => found.remove(0),
         _ => {
             let names: Vec<&str> = found.iter().map(|(name, _)| *name).collect();
-            return Err(format!(
-                "step {step}: assertion {position}: expected exactly one comparison, found {}",
-                names.join(", ")
-            ));
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {step}: assertion {position}: expected exactly one comparison, found {}",
+                    names.join(", ")
+                ),
+            });
         }
     };
 
@@ -352,27 +637,36 @@ fn parse_expectation(step: usize, position: usize, value: &Value) -> Result<Expe
         "not_equals" => Matcher::NotEquals(expected),
         "contains" => {
             if !expected.is_string() && !expected.is_array() {
-                return Err(format!(
-                    "step {step}: assertion {position}: `contains` compares a string or an array, found {}; use `equals` for other values",
-                    kind_name(&expected)
-                ));
+                return Err(Problem {
+                    location,
+                    message: format!(
+                        "step {step}: assertion {position}: `contains` compares a string or an array, found {}; use `equals` for other values",
+                        kind_name(&expected)
+                    ),
+                });
             }
             Matcher::Contains(expected)
         }
         "exists" => match expected {
             Value::Bool(wanted) => Matcher::Exists(wanted),
             other => {
-                return Err(format!(
-                    "step {step}: assertion {position}: `exists` takes true or false, found {}",
-                    kind_name(&other)
-                ));
+                return Err(Problem {
+                    location,
+                    message: format!(
+                        "step {step}: assertion {position}: `exists` takes true or false, found {}",
+                        kind_name(&other)
+                    ),
+                });
             }
         },
         other => {
-            return Err(format!(
-                "step {step}: assertion {position}: `{other}` is not a comparison; use one of {}",
-                COMPARISONS.join(", ")
-            ));
+            return Err(Problem {
+                location,
+                message: format!(
+                    "step {step}: assertion {position}: `{other}` is not a comparison; use one of {}",
+                    COMPARISONS.join(", ")
+                ),
+            });
         }
     };
 
@@ -695,6 +989,134 @@ steps:
         let error = interpolate(&serde_json::json!("${missing}"), &vars)
             .expect_err("the reference must be rejected");
         assert!(error.contains("missing"), "got: {error}");
+    }
+
+    /// A case whose first step is `cli.run` followed by `extra`.
+    ///
+    /// The fixed first lines keep a fixture's own line numbers predictable.
+    fn step_with(extra: &str) -> String {
+        format!("name: Broken\nsteps:\n  - cli.run:\n      command: ta\n{extra}")
+    }
+
+    /// The typical structural mistakes of a case file and the node each one
+    /// belongs to, as 1-based line and column numbers.
+    fn structural_mistakes() -> Vec<(String, u64, u64, &'static str)> {
+        vec![
+            (
+                step_with("    expect:\n      - path: $.exit_code\n        equal: 0\n"),
+                6,
+                9,
+                "unknown field(s) equal",
+            ),
+            (
+                step_with("    expect:\n      - equals: 0\n"),
+                6,
+                9,
+                "`path` is required",
+            ),
+            (
+                step_with(
+                    "    expect:\n      - path: $.exit_code\n        equals: 0\n        contains: \"0\"\n",
+                ),
+                6,
+                9,
+                "expected exactly one comparison",
+            ),
+            (
+                "name: Broken\nsteps:\n  - cli.run:\n      command: ta\n    other.step: {}\n"
+                    .to_string(),
+                3,
+                5,
+                "expected exactly one step name",
+            ),
+            (
+                step_with("    save:\n      code: 3\n"),
+                6,
+                13,
+                "must be a string",
+            ),
+            (
+                step_with("    expect: 3\n"),
+                5,
+                13,
+                "`expect` must be a list of assertions",
+            ),
+            (
+                step_with("    save: 3\n"),
+                5,
+                11,
+                "`save` must be a mapping",
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_structural_error_names_its_line_and_column_with_a_snippet() {
+        for (text, line, column, fragment) in structural_mistakes() {
+            let error = parse(&text).expect_err("the case must be rejected");
+
+            assert!(
+                error.starts_with(&format!("line {line} column {column}: ")),
+                "the error must start with its location, got: {error}"
+            );
+            assert!(error.contains(fragment), "got: {error}");
+            // The snippet is the one the YAML parser writes: a header naming the
+            // position, the reported source line with its line number and a caret
+            // under the column.
+            assert!(
+                error.contains(&format!(" --> <input>:{line}:{column}\n")),
+                "the snippet header must name the position, got: {error}"
+            );
+            let source = text
+                .lines()
+                .nth(usize::try_from(line - 1).expect("a fixture line fits a usize"))
+                .expect("the reported line must exist");
+            assert!(
+                error.contains(&format!("{line} | {source}\n")),
+                "the snippet must quote line {line}, got: {error}"
+            );
+            assert!(
+                error
+                    .lines()
+                    .any(|text| text.contains('|') && text.contains('^')),
+                "the snippet must keep a caret line, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grammar_error_and_a_structural_error_share_the_snippet_layout() {
+        let grammar = parse("name: Broken\nsteps:\n  - cli.run: [\n").expect_err("grammar error");
+        let structural =
+            parse(&step_with("    expect:\n      - equals: 0\n")).expect_err("structural error");
+
+        for error in [grammar, structural] {
+            assert!(error.contains(" --> <input>:"), "got: {error}");
+            assert!(
+                error
+                    .lines()
+                    .any(|text| text.contains('|') && text.contains('^')),
+                "got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_variable_error_names_the_variable_line() {
+        let error =
+            parse("name: Broken\nvars:\n  port: [8080]\nsteps:\n  - cli.run:\n      command: ta\n")
+                .expect_err("the variable must be rejected");
+
+        assert!(error.contains("port"), "got: {error}");
+        assert!(error.starts_with("line 3 column 9: "), "got: {error}");
+    }
+
+    #[test]
+    fn a_case_without_steps_points_at_the_document() {
+        let error = parse("name: Broken\nsteps: []\n").expect_err("the case must be rejected");
+
+        assert!(error.contains("no steps"), "got: {error}");
+        assert!(error.starts_with("line 1 column 1: "), "got: {error}");
     }
 
     #[test]
