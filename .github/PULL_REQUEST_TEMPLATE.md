@@ -1,41 +1,78 @@
 <!--
 Title: <type>(<scope>): <summary>  (Conventional Commits, English, at most 72 characters)
-Each section: English first, then Chinese. Write "None / 无" when a section is empty; do not delete it.
+Write the whole English block first, then the whole Chinese block. Each language has
+its own headings; never merge them into one bilingual heading such as "## Summary / 摘要",
+and never alternate the two languages inside one list or one table.
+Write "None" in an empty English section and "无" in an empty Chinese section; do not
+delete the section.
 No local paths, user names, machine names or secrets.
 标题：<type>(<scope>): <summary>（Conventional Commits，英文，不超过 72 个字符）
-每一节先写英文、再写中文。没有内容时写 "None / 无"，不要删除该节。
+先写完整个英文块，再写整个中文块。两种语言各自使用独立标题，
+不要合并成 "## Summary / 摘要" 这样的双语标题，也不要在同一张列表或表格里中英交替。
+某一节没有内容时，英文写 "None"、中文写 "无"，不要删除该节。
 不出现本机路径、用户名、机器名或密钥。
 -->
 
-## Summary / 摘要
+## Summary
 
-<!-- What changed and why. 改了什么、为什么改。 -->
+<!-- What changed and why, in one to three sentences. -->
 
-## Changes / 变更
+## Changes
 
-<!-- One bullet per behavior change. 每个行为变化一条。 -->
+<!-- One bullet per behavior change. -->
 
 -
 
-## Verification / 验证
+## Verification
 
-<!-- Commands actually run and their real results. 实际运行的命令及真实结果。 -->
+<!-- Commands actually run and their real results. -->
 
-| Command / 命令 | Result / 结果 |
+| Command | Result |
 | --- | --- |
 | `cargo fmt --check` | |
 | `cargo clippy --all-targets -- -D warnings` | |
 | `cargo test` | |
 
-**Not verified / 未验证:**
+**Not verified:**
 
-## Dependencies / 依赖
+## Dependencies
 
-<!-- For each dependency added, removed or upgraded: purpose, alternatives considered, reason.
-     新增、移除或升级的每个依赖：用途、考虑过的替代方案、选择原因。 -->
+<!-- For each dependency added, removed or upgraded: purpose, alternatives considered, reason. -->
 
-None / 无
+None
 
-## Risks and follow-ups / 风险与后续
+## Risks and follow-ups
 
-None / 无
+None
+
+## 摘要
+
+<!-- 改了什么、为什么改，一到三句。 -->
+
+## 变更
+
+<!-- 每个行为变化一条。 -->
+
+-
+
+## 验证
+
+<!-- 实际运行的命令及真实结果。 -->
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo fmt --check` | |
+| `cargo clippy --all-targets -- -D warnings` | |
+| `cargo test` | |
+
+**未验证：**
+
+## 依赖
+
+<!-- 新增、移除或升级的每个依赖：用途、考虑过的替代方案、选择原因。 -->
+
+无
+
+## 风险与后续
+
+无

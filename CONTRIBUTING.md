@@ -35,15 +35,17 @@ Example: `feat(http): add JSON path assertions`
 
 ## Pull request description
 
-Every PR uses the same sections, in this order. Each section is written in English first, then Chinese. Write `None / 无` in a section that has nothing to report; do not delete it.
+Every PR uses the same sections. Write the whole English block first, then the whole Chinese block. Each language has its own headings: do not merge them into one bilingual heading such as `## Summary / 摘要`, and do not alternate the two languages inside one list or one table. Write `None` in an empty English section and `无` in an empty Chinese section; do not delete the section.
 
-| Section | Content |
-| --- | --- |
-| `## Summary / 摘要` | What changed and why, in one to three sentences per language. |
-| `## Changes / 变更` | A list of the behavior changes. |
-| `## Verification / 验证` | The commands that were run and their real results, plus what was not verified. |
-| `## Dependencies / 依赖` | Every dependency added, removed or upgraded, with the comparison required below. |
-| `## Risks and follow-ups / 风险与后续` | Known gaps, risks, and work left for later. |
+| English section | Chinese section | Content |
+| --- | --- | --- |
+| `## Summary` | `## 摘要` | What changed and why, in one to three sentences. |
+| `## Changes` | `## 变更` | A list of the behavior changes. |
+| `## Verification` | `## 验证` | The commands that were run and their real results, plus what was not verified. |
+| `## Dependencies` | `## 依赖` | Every dependency added, removed or upgraded, with the comparison required below. |
+| `## Risks and follow-ups` | `## 风险与后续` | Known gaps, risks, and work left for later. |
+
+Release notes under `docs/releases/` follow the same rule: one English block with its own headings, then one Chinese block with its own headings.
 
 Rules for the description:
 
