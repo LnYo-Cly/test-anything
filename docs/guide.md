@@ -11,6 +11,7 @@ The complete reference for `ta`: installation options, building from source, the
 - [Usage](#usage)
   - [Parallel runs](#parallel-runs)
   - [The service under test](#the-service-under-test)
+  - [Observers](#observers)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
   - [Secrets](#secrets)
@@ -20,6 +21,7 @@ The complete reference for `ta`: installation options, building from source, the
   - [Assertions](#assertions)
   - [`http.request`](#httprequest)
   - [`cli.run`](#clirun)
+  - [`log.file`](#logfile)
 - [Failure bundles](#failure-bundles)
 - [Output](#output)
 - [Exit codes](#exit-codes)
@@ -70,9 +72,10 @@ cargo build
 ```
 
 The binary is written to `target/debug/ta` (`target\debug\ta.exe` on Windows).
-The `http` feature provides the `http.request` step and the `cli` feature
-provides the `cli.run` step; both are enabled by default. Build a subset with
-`--no-default-features --features cli`, or no driver at all with
+The `http` feature provides the `http.request` step, the `cli` feature provides
+the `cli.run` step and the `log` feature provides the `log.file` observer; all
+three are enabled by default. Build a subset with
+`--no-default-features --features cli`, or nothing at all with
 `--no-default-features`.
 
 ## Test
@@ -109,6 +112,14 @@ the suite needs neither the network nor a system command such as `echo` or
 failure bundle under `.ta/failures`, which git ignores; add
 `--var bundles=<directory>` to put it somewhere else.
 
+`tests/self/observe-log.yaml` exercises the `log.file` observer. It needs a
+program that appends a line to a file without a shell, and there is exactly one
+such program every checkout of this repository has: `git`. The case calls
+`git config --file <file> --add ta.line "order created"`, which appends to the
+file it names on Linux, macOS and Windows. The file it writes is ignored by
+`tests/self/.gitignore`. A machine without `git` on `PATH` fails that one case
+with an environment error (exit 4); the rest of the suite does not use it.
+
 ## Usage
 
 ```sh
@@ -131,11 +142,11 @@ ta --output json schema > ta-case.schema.json
 ```
 
 `ta run` accepts files and directories. A directory is searched recursively for
-`.yaml` and `.yml` files, which are run in path order. Every case file and every
-step is validated before the first case runs: if anything is invalid, no case
-runs and the exit code is 3. A step that fails an assertion stops its own case;
-the remaining steps of that case are reported as skipped and the other cases
-still run.
+`.yaml` and `.yml` files, which are run in path order. Every case file, every
+step and every observation is validated before the first case runs: if anything
+is invalid, no case runs and the exit code is 3. A step that fails an assertion
+stops its own case; the remaining steps of that case are reported as skipped and
+the other cases still run.
 
 `--var name=value` defines a variable for every case of the run and may be
 repeated. It overrides a variable of the same name in the case's `vars:`. A
@@ -233,6 +244,66 @@ A run that starts before the service is listening reports an environment error
 evaluated. That is how a wrong target is told apart from a wrong expectation: an
 unreachable service is never a failed assertion.
 
+### Observers
+
+An interface that answers `201` has not necessarily done what it promised. An
+**observer** reads another layer while a step runs — a log file today, a network
+capture or a database later — so a case can assert on the evidence the step left
+behind.
+
+`observe:` is optional. It is a mapping: the key is the name you choose for the
+observation, and the value is exactly one registered observer and its arguments,
+written the same way as a step:
+
+```yaml
+name: Order is logged
+observe:
+  app_log:
+    log.file:
+      path: ${log_dir}/app.log
+steps:
+  - http.request:
+      method: POST
+      url: ${base}/orders
+    expect:
+      - path: $.status
+        equals: 201
+      - path: $.observed.app_log.lines
+        contains: "order created"
+```
+
+The collected value is merged into **every step result** of the case as
+`observed.<name>`, before the assertions are evaluated. An ordinary `expect` path
+is enough, no new assertion syntax is needed, and a failure bundle's `report.json`
+carries the same values, redacted like everything else.
+
+| Rule | Meaning |
+| --- | --- |
+| Name | Becomes a key of `observed`, so it uses lowercase letters, digits, `.`, `_` and `-`. A repeated name is a duplicate mapping key and the YAML parser refuses it with its line and column. |
+| One observer | An entry names exactly one observer and its arguments. An unknown observer or arguments that do not satisfy its schema is a case error (exit 3), reported by `ta lint` and `ta run` with the line and column of the node. |
+| Variables | Arguments accept `${name}` and `${env:NAME}` and are resolved once, when the case starts. A value a step `save`s is not available to an observation. |
+| Isolation | Each case creates its own observation. Cases that run at the same time with `--jobs` never share state. |
+| Steps | The observer starts before each step and is collected after it, so it reports what that one step changed. |
+| Read-only | Observers only read. The built-in ones open files for reading and write nothing. |
+| Observer errors | A file that cannot be read is an environment error (exit 4); the message names the observation and the observer. |
+| No result | A step that fails or times out produces no result, so its observation is not collected: there is nothing to merge it into. |
+
+Every built-in step returns a JSON object. If a plugin's step returns another
+value and the case declares observations, the result is wrapped so that nothing
+is lost: the original value moves to `value` and the observations stay under
+`observed`, as in `{"value": 5, "observed": {"app_log": {"lines": []}}}`.
+
+**Writing an observer.** The engine offers the same registration path to
+built-in and external extensions. An observer declares a name, a description, a
+JSON Schema for its arguments and a `validate` function that enforces the same
+contract; `ta schema` publishes both under `$defs` and inside `observe`. Its
+factory creates one instance per case, and the instance implements two calls:
+`start` before a step and `collect` after it, which returns the JSON value the
+step result shows under `observed.<name>`. An error from either call is reported
+as a case error, naming the observation and the observer. The contract lives in
+`src/core/observer.rs`; `src/drivers/log.rs` is a complete example, and
+`tests/architecture.rs` keeps the engine free of any concrete observer.
+
 ### Classification and filtering
 
 A case may describe where it belongs, so one repository can hold interface,
@@ -321,24 +392,37 @@ cases/login.yaml: line 6 column 9: step 1: assertion 1: unknown field(s) equal; 
   |         ^ step 1: assertion 1: unknown field(s) equal; use one of equals, not_equals, contains, exists
 7 |         equal: 0
   |
-cases/logout.yaml: line 2 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+cases/logout.yaml: line 2 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, observe, steps
  --> <input>:2:1
   |
 1 | name: Logout
 2 | naem: typo
-  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, observe, steps
 3 | steps:
 4 |   - cli.run:
   |
 Checked 2 files: 2 errors.
 ```
 
-Problems that need the registry, such as an undefined variable or a step
-argument that does not match the step's schema, name the step instead, because
-the parser cannot know them:
+Problems that need the registry, such as an undefined variable, a step argument
+that does not match the step's schema, or an observation that names an unknown
+observer, name the node instead, and carry its line and column, because the
+parser cannot know them:
 
 ```text
 cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
+```
+
+```text
+cases/login.yaml: line 4 column 5: observation `app_log`: `log.fil` is not a registered observer; registered observers: `log.file`
+ --> <input>:4:5
+  |
+2 | observe:
+3 |   app_log:
+4 |     log.fil:
+  |     ^ observation `app_log`: `log.fil` is not a registered observer; registered observers: `log.file`
+5 |       path: app.log
+  |
 ```
 
 `--output json` writes exactly one object:
@@ -439,14 +523,16 @@ Redaction has limits that matter when you choose a value:
 
 `ta schema` prints a [JSON Schema](https://json-schema.org/) (draft 2020-12) for
 one case file. The schema follows the parser: only `name`, `project`, `suite`,
-`layer`, `tags`, `vars` and `steps` at the top level; one registered step name
-per step, plus optional `expect` and `save`; the four comparisons with their
-value types; and each step's argument schema under `$defs`, together with the
-step's description. The classification fields are optional strings that cannot
-be empty, and `tags` is an array of unique non-empty strings. The registry
-builds it, so a build with fewer drivers describes fewer steps. `--output text`
-(the default) pretty-prints the schema and `--output json` prints it compactly;
-both are the same document, and the command exits 0.
+`layer`, `tags`, `vars`, `observe` and `steps` at the top level; one registered
+step name per step, plus optional `expect` and `save`; one registered observer
+and its arguments per entry of `observe`; the four comparisons with their value
+types; and each step's and observer's argument schema under `$defs`, together
+with its description. The classification fields are optional strings that cannot
+be empty, `tags` is an array of unique non-empty strings, and an observation name
+matches `^[a-z0-9._-]+$`. The registry builds it, so a build with fewer features
+describes fewer steps and observers. `--output text` (the default) pretty-prints
+the schema and `--output json` prints it compactly; both are the same document,
+and the command exits 0.
 
 Save the output as a file next to the cases and point an editor at it. For
 [yaml-language-server](https://github.com/redhat-developer/yaml-language-server),
@@ -479,9 +565,9 @@ but no step is registered, so the step item accepts nothing.
 
 ## Case files
 
-A case is a YAML file with a name, optional variables and a list of steps. Each
-step is a mapping with exactly one step name, optionally followed by `expect`
-and `save`:
+A case is a YAML file with a name, optional variables, optional observations and
+a list of steps. Each step is a mapping with exactly one step name, optionally
+followed by `expect` and `save`:
 
 ```yaml
 name: Login returns a token
@@ -507,10 +593,12 @@ steps:
         equals: alice
 ```
 
-Unknown fields in a case file, unregistered step names, step arguments that do
-not match the step's schema and undefined variables are all case errors. A case
-may also declare `project`, `suite`, `layer` and `tags`; see
-[Classification and filtering](#classification-and-filtering).
+Unknown fields in a case file, unregistered step names, unregistered observers,
+step or observer arguments that do not match their schema, and undefined
+variables are all case errors. A case may also declare `project`, `suite`,
+`layer` and `tags` (see
+[Classification and filtering](#classification-and-filtering)) and `observe`
+(see [Observers](#observers)).
 
 ### Variables
 
@@ -639,6 +727,53 @@ and the step is a timeout (exit 5). Both pipes are read on their own threads, so
 a program that writes more than a pipe buffer cannot deadlock the run; after the
 program ends `ta` waits at most one second for the pipes to close, so a process
 the program left behind cannot hang it.
+
+### `log.file`
+
+Reports the text a log file gained while the step ran.
+
+| Argument | Meaning |
+| --- | --- |
+| `path` | File to read. Required. Read as UTF-8; invalid bytes become replacement characters. |
+
+The result is an object with `lines`, `text`, `truncated` and `limited`:
+
+| Field | Meaning |
+| --- | --- |
+| `lines` | The new text split into lines. A trailing `\r` is dropped, so a CRLF log reads like an LF one; a final newline does not start an empty line; a last line without a newline still counts as a line. |
+| `text` | The new text exactly as read. |
+| `truncated` | `true` when the file is shorter than it was when the step started — it was truncated or rotated — and the read therefore restarted at the beginning. |
+| `limited` | `true` when the step added more than 1 MiB: only the first 1 MiB is reported, so one noisy step cannot fill a failure bundle or a terminal. |
+
+```yaml
+name: Worker logs the order
+observe:
+  worker_log:
+    log.file:
+      path: ${log_dir}/worker.log
+steps:
+  - cli.run:
+      command: ./worker
+      args: ["--once"]
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.observed.worker_log.lines
+        contains: "order created"
+      - path: $.observed.worker_log.truncated
+        equals: false
+```
+
+- The read starts at the length the file had when the step started, so lines
+  that were already there never appear.
+- A file that does not exist is empty, not an error: a program that creates it
+  during the step is exactly what this observer is for. The observer never
+  creates or changes the file.
+- A directory, or a file that cannot be read, is an environment error (exit 4)
+  that names the path and the reason.
+- Rotation is detected by length. A file that is replaced between two steps by
+  one of the same length or longer cannot be told apart from an append, and a
+  file that is rewritten between two steps is read from its recorded length.
 
 ## Failure bundles
 
@@ -812,8 +947,8 @@ Diagnostics never go to standard output.
 | 0 | Every case ran and passed |
 | 1 | At least one case failed an assertion or could not finish a step |
 | 2 | Command-line usage error, including filters that select no case |
-| 3 | Invalid case file, invalid step arguments, unknown step, undefined variable or an unset `${env:NAME}` |
-| 4 | Environment error (for example an unreachable target) |
+| 3 | Invalid case file, invalid step arguments, unknown step, unknown observer, invalid observer arguments, undefined variable or an unset `${env:NAME}` |
+| 4 | Environment error (for example an unreachable target, or a log file that cannot be read) |
 | 5 | Timeout |
 | 9 | Reserved for a feature that is not implemented; no current command returns it |
 

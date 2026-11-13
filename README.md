@@ -108,6 +108,8 @@ Classify a case with `project`, `suite`, `layer` and `tags`, then run only what 
 
 Cases run one after another by default; `--jobs N` runs up to N of them at the same time and still reports them in the same order, with the same exit code.
 
+An `observe:` block watches another layer with a read-only observer: the built-in `log.file` reports the log lines a step added, the value appears in the step result as `observed.<name>`, and an ordinary `expect` entry asserts on it and gets it into the failure bundle. See [observers](docs/guide.md#observers).
+
 ## For coding agents
 
 `ta` is meant to be driven by an agent without a human reading the terminal:
