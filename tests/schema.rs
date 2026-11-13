@@ -219,22 +219,33 @@ fn the_schema_accepts_every_valid_repository_case() {
     }
 }
 
-#[cfg(feature = "http")]
+#[cfg(all(feature = "http", feature = "cli"))]
 #[test]
-fn the_schema_accepts_the_readme_example() {
+fn the_schema_accepts_every_case_example_in_the_docs() {
     let validator = validator(schema());
-    let readme = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"))
-        .expect("README.md must be readable");
-    let example = first_yaml_block(&readme).expect("README.md must contain a YAML case example");
-
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut checked = 0;
+    for doc in ["README.md", "README.zh-CN.md", "docs/guide.md"] {
+        let text = fs::read_to_string(root.join(doc)).expect("the document must be readable");
+        for example in case_examples(&text) {
+            assert!(
+                test_anything::core::case::parse(example).is_ok(),
+                "an example in {doc} must parse as a case:
+{example}"
+            );
+            let instance: Value =
+                serde_saphyr::from_str(example).expect("the example must be valid YAML");
+            assert!(
+                validator.is_valid(&instance),
+                "the schema rejected an example in {doc}:
+{example}"
+            );
+            checked += 1;
+        }
+    }
     assert!(
-        test_anything::core::case::parse(example).is_ok(),
-        "the README example must parse as a case"
-    );
-    let instance: Value = serde_saphyr::from_str(example).expect("the example must be valid YAML");
-    assert!(
-        validator.is_valid(&instance),
-        "the schema rejected the README example"
+        checked >= 5,
+        "expected the docs to hold case examples, found {checked}"
     );
 }
 
@@ -302,10 +313,23 @@ fn files_with_extension(dir: PathBuf, extension: &str) -> Vec<PathBuf> {
     files
 }
 
-/// The first fenced YAML block after the "Case files" heading.
-#[cfg(feature = "http")]
-fn first_yaml_block(readme: &str) -> Option<&str> {
-    let section = readme.split("## Case files").nth(1)?;
-    let rest = section.split_once("```yaml\n")?.1;
-    rest.split_once("\n```").map(|(block, _)| block)
+/// Complete case files in a document: `yaml` blocks with a top-level `name:`.
+///
+/// Fragments that show only part of a case have no `name:` line and are skipped.
+#[cfg(all(feature = "http", feature = "cli"))]
+fn case_examples(text: &str) -> Vec<&str> {
+    text.split(
+        "```yaml
+",
+    )
+    .skip(1)
+    .filter_map(|rest| {
+        rest.split_once(
+            "
+```",
+        )
+        .map(|(block, _)| block)
+    })
+    .filter(|block| block.lines().any(|line| line.starts_with("name:")))
+    .collect()
 }
