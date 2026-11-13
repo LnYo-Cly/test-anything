@@ -13,6 +13,8 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # The root certificates used by the HTTP client's TLS stack.
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
