@@ -1,0 +1,12 @@
+name: Filter fixture API
+project: shop
+suite: smoke
+layer: api
+tags: [smoke, fast]
+steps:
+  - cli.run:
+      command: ${ta}
+      args: ["--version"]
+    expect:
+      - path: $.exit_code
+        equals: 0

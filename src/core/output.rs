@@ -3,10 +3,12 @@
 //! This is the only place the JSON report is built, and the only place result
 //! text is formatted, so the two views cannot drift apart.
 
+use std::path::PathBuf;
+
 use serde_json::{Map, Value, json};
 
 use crate::core::assert::AssertionReport;
-use crate::core::case::CaseError;
+use crate::core::case::{CaseError, LoadedCase};
 use crate::core::report::{CaseReport, CaseStatus, Problem, RunOutcome, StepReport, Summary};
 
 /// How results are rendered.
@@ -34,6 +36,40 @@ pub struct LintReport {
     pub files: usize,
     /// Every problem found, across all files.
     pub errors: Vec<CaseError>,
+    /// Every case that parsed, so a reader can discover the classification
+    /// values without running anything.
+    pub cases: Vec<LintCase>,
+}
+
+/// One parsed case of a lint report.
+#[derive(Debug, Clone, Default)]
+pub struct LintCase {
+    /// File the case came from.
+    pub file: PathBuf,
+    /// Case name.
+    pub name: String,
+    /// Project the case declares.
+    pub project: Option<String>,
+    /// Suite the case declares.
+    pub suite: Option<String>,
+    /// Layer the case declares.
+    pub layer: Option<String>,
+    /// Tags the case declares.
+    pub tags: Vec<String>,
+}
+
+impl LintCase {
+    /// Copies the classification of a loaded case.
+    pub fn new(loaded: &LoadedCase) -> Self {
+        Self {
+            file: loaded.path.clone(),
+            name: loaded.case.name.clone(),
+            project: loaded.case.project.clone(),
+            suite: loaded.case.suite.clone(),
+            layer: loaded.case.layer.clone(),
+            tags: loaded.case.tags.clone(),
+        }
+    }
 }
 
 impl LintReport {
@@ -94,6 +130,20 @@ fn json_lint(report: &LintReport) -> Value {
                 })
             })
             .collect::<Vec<Value>>(),
+        "cases": report
+            .cases
+            .iter()
+            .map(|case| {
+                json!({
+                    "file": case.file.display().to_string(),
+                    "name": case.name,
+                    "project": case.project,
+                    "suite": case.suite,
+                    "layer": case.layer,
+                    "tags": case.tags,
+                })
+            })
+            .collect::<Vec<Value>>(),
     })
 }
 
@@ -121,6 +171,7 @@ pub fn render(outcome: &RunOutcome, format: Format) -> Rendered {
             stderr: match outcome {
                 RunOutcome::Completed(report) => bundle_errors(report),
                 RunOutcome::Rejected { .. } => String::new(),
+                RunOutcome::NoMatch { message } => format!("error: {message}\n"),
             },
         },
         Format::Text => text_report(outcome),
@@ -128,22 +179,28 @@ pub fn render(outcome: &RunOutcome, format: Format) -> Rendered {
 }
 
 fn text_report(outcome: &RunOutcome) -> Rendered {
-    let RunOutcome::Completed(report) = outcome else {
-        let RunOutcome::Rejected { errors } = outcome else {
-            return Rendered::default();
-        };
-        let mut stderr = String::new();
-        for error in errors {
-            stderr.push_str(&format!(
-                "error: {}: {}\n",
-                error.file.display(),
-                error.message
-            ));
+    let report = match outcome {
+        RunOutcome::Completed(report) => report,
+        RunOutcome::NoMatch { message } => {
+            return Rendered {
+                stdout: String::new(),
+                stderr: format!("error: {message}\n"),
+            };
         }
-        return Rendered {
-            stdout: String::new(),
-            stderr,
-        };
+        RunOutcome::Rejected { errors } => {
+            let mut stderr = String::new();
+            for error in errors {
+                stderr.push_str(&format!(
+                    "error: {}: {}\n",
+                    error.file.display(),
+                    error.message
+                ));
+            }
+            return Rendered {
+                stdout: String::new(),
+                stderr,
+            };
+        }
     };
 
     let mut stdout = String::new();
@@ -172,12 +229,13 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
 
     let summary = report.summary();
     stdout.push_str(&format!(
-        "Summary: {} {} ({} passed, {} failed, {} errors), {} {} ({} passed, {} failed, {} errors, {} skipped), {} ms\n",
+        "Summary: {} {} ({} passed, {} failed, {} errors, {} filtered), {} {} ({} passed, {} failed, {} errors, {} skipped), {} ms\n",
         summary.cases,
         noun(summary.cases, "case", "cases"),
         summary.cases_passed,
         summary.cases_failed,
         summary.cases_errored,
+        summary.filtered,
         summary.steps,
         noun(summary.steps, "step", "steps"),
         summary.steps_passed,
@@ -248,7 +306,9 @@ fn json_report(outcome: &RunOutcome) -> Value {
             report.duration,
             report.bundle_errors.as_slice(),
         ),
-        RunOutcome::Rejected { .. } => (Summary::default(), std::time::Duration::ZERO, &[][..]),
+        RunOutcome::Rejected { .. } | RunOutcome::NoMatch { .. } => {
+            (Summary::default(), std::time::Duration::ZERO, &[][..])
+        }
     };
     object.insert("summary".to_string(), summary_value(&summary, duration));
     object.insert(
@@ -287,6 +347,13 @@ fn json_report(outcome: &RunOutcome) -> Value {
                 ),
             );
         }
+        RunOutcome::NoMatch { message } => {
+            object.insert("cases".to_string(), Value::Array(Vec::new()));
+            object.insert("errors".to_string(), Value::Array(Vec::new()));
+            // The filters are valid but selected nothing, so this is neither a
+            // case error nor a test failure; the message says what to change.
+            object.insert("filter_error".to_string(), Value::String(message.clone()));
+        }
     }
 
     Value::Object(object)
@@ -295,6 +362,7 @@ fn json_report(outcome: &RunOutcome) -> Value {
 fn summary_value(summary: &Summary, duration: std::time::Duration) -> Value {
     json!({
         "cases": summary.cases,
+        "filtered": summary.filtered,
         "cases_passed": summary.cases_passed,
         "cases_failed": summary.cases_failed,
         "cases_errored": summary.cases_errored,
@@ -315,6 +383,10 @@ pub fn case_json(case: &CaseReport) -> Value {
     json!({
         "file": case.file.display().to_string(),
         "name": case.name,
+        "project": case.project,
+        "suite": case.suite,
+        "layer": case.layer,
+        "tags": case.tags,
         "status": case.status.as_str(),
         "duration_ms": millis(case.duration),
         "bundle": case.bundle.as_ref().map(|path| path.display().to_string()),
@@ -369,6 +441,10 @@ mod tests {
             cases: vec![CaseReport {
                 file: PathBuf::from("cases/login.yaml"),
                 name: "Login".to_string(),
+                project: Some("shop".to_string()),
+                suite: Some("smoke".to_string()),
+                layer: Some("api".to_string()),
+                tags: vec!["smoke".to_string()],
                 status: CaseStatus::Failed,
                 duration: Duration::from_millis(3),
                 steps: vec![StepReport {
@@ -395,6 +471,7 @@ mod tests {
                 }),
                 bundle: Some(PathBuf::from(".ta/failures/17-42/0-Login")),
             }],
+            filtered: 2,
             duration: Duration::from_millis(4),
             bundle_errors: Vec::new(),
         })
@@ -423,6 +500,11 @@ mod tests {
             rendered.stdout
         );
         assert!(rendered.stdout.contains("Summary: 1 case"));
+        assert!(
+            rendered.stdout.contains("0 errors, 2 filtered"),
+            "the summary must count the filtered cases, got: {}",
+            rendered.stdout
+        );
     }
 
     #[test]
@@ -432,8 +514,13 @@ mod tests {
 
         assert_eq!(value["ok"], false);
         assert_eq!(value["summary"]["cases"], 1);
+        assert_eq!(value["summary"]["filtered"], 2);
         assert_eq!(value["summary"]["cases_failed"], 1);
         assert_eq!(value["summary"]["steps_failed"], 1);
+        assert_eq!(value["cases"][0]["project"], "shop");
+        assert_eq!(value["cases"][0]["suite"], "smoke");
+        assert_eq!(value["cases"][0]["layer"], "api");
+        assert_eq!(value["cases"][0]["tags"], json!(["smoke"]));
         assert_eq!(value["cases"][0]["duration_ms"], 3);
         assert_eq!(value["cases"][0]["bundle"], ".ta/failures/17-42/0-Login");
         assert_eq!(value["cases"][0]["steps"][0]["status"], "failed");
@@ -504,6 +591,40 @@ mod tests {
     }
 
     #[test]
+    fn a_filter_that_matches_nothing_is_a_diagnostic_and_a_json_error() {
+        let outcome = RunOutcome::NoMatch {
+            message: "no case matched --tag \"missing\"; the discovered cases use tags: `smoke`"
+                .to_string(),
+        };
+
+        let text = render(&outcome, Format::Text);
+        assert!(text.stdout.is_empty());
+        assert!(
+            text.stderr.contains("--tag \"missing\""),
+            "got: {}",
+            text.stderr
+        );
+
+        let json = render(&outcome, Format::Json);
+        let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["summary"]["cases"], 0);
+        assert_eq!(value["cases"], json!([]));
+        assert_eq!(value["errors"], json!([]));
+        assert!(
+            value["filter_error"]
+                .as_str()
+                .is_some_and(|message| message.contains("`smoke`")),
+            "got: {value}"
+        );
+        assert!(
+            json.stderr.contains("--tag \"missing\""),
+            "got: {}",
+            json.stderr
+        );
+    }
+
+    #[test]
     fn lint_text_puts_one_error_per_line_and_ends_with_a_summary() {
         let report = LintReport {
             files: 2,
@@ -517,6 +638,7 @@ mod tests {
                     message: "step 1: undefined variable".to_string(),
                 },
             ],
+            cases: Vec::new(),
         };
 
         let rendered = render_lint(&report, Format::Text);
@@ -536,6 +658,7 @@ mod tests {
                 file: PathBuf::from("broken.yaml"),
                 message: "line 2 column 3: unclosed bracket\n --> <input>\n  |".to_string(),
             }],
+            cases: Vec::new(),
         };
 
         let rendered = render_lint(&report, Format::Text);
@@ -547,12 +670,20 @@ mod tests {
     }
 
     #[test]
-    fn lint_json_has_ok_files_and_errors() {
+    fn lint_json_has_ok_files_errors_and_the_case_classification() {
         let report = LintReport {
             files: 1,
             errors: vec![CaseError {
                 file: PathBuf::from("broken.yaml"),
                 message: "line 2: unknown field".to_string(),
+            }],
+            cases: vec![LintCase {
+                file: PathBuf::from("cases/login.yaml"),
+                name: "Login".to_string(),
+                project: Some("shop".to_string()),
+                suite: None,
+                layer: Some("api".to_string()),
+                tags: vec!["smoke".to_string()],
             }],
         };
 
@@ -565,6 +696,14 @@ mod tests {
                 "ok": false,
                 "files": 1,
                 "errors": [{"file": "broken.yaml", "message": "line 2: unknown field"}],
+                "cases": [{
+                    "file": "cases/login.yaml",
+                    "name": "Login",
+                    "project": "shop",
+                    "suite": null,
+                    "layer": "api",
+                    "tags": ["smoke"],
+                }],
             })
         );
     }

@@ -1,0 +1,48 @@
+name: Classification filters select cases, count the rest and report an empty selection
+steps:
+  - cli.run:
+      command: ${ta}
+      args:
+        - --output
+        - json
+        - run
+        - tests/self/fixtures/filter-api.case
+        - tests/self/fixtures/filter-cli.case
+        - --no-bundle
+        - --layer
+        - api
+        - --tag
+        - smoke
+        - --var
+        - ta=${ta}
+    expect:
+      - path: $.exit_code
+        equals: 0
+      - path: $.json.summary.cases
+        equals: 1
+      - path: $.json.summary.filtered
+        equals: 1
+      - path: $.json.cases[0].project
+        equals: shop
+      - path: $.json.cases[0].layer
+        equals: api
+      - path: $.json.cases[0].tags[0]
+        equals: smoke
+  - cli.run:
+      command: ${ta}
+      args:
+        - run
+        - tests/self/fixtures/filter-api.case
+        - tests/self/fixtures/filter-cli.case
+        - --no-bundle
+        - --tag
+        - missing
+        - --var
+        - ta=${ta}
+    expect:
+      - path: $.exit_code
+        equals: 2
+      - path: $.stderr
+        contains: "--tag \"missing\""
+      - path: $.stderr
+        contains: "`smoke`"

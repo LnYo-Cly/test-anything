@@ -11,7 +11,8 @@ pub enum ExitCode {
     Success = 0,
     /// At least one case ran and failed an assertion.
     TestFailure = 1,
-    /// The command line was invalid. clap reports this code on its own.
+    /// The command line was invalid, or filters selected no case. clap reports
+    /// an invalid command line on its own.
     Usage = 2,
     /// A case file was invalid (validation error).
     InvalidCase = 3,

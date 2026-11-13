@@ -9,6 +9,7 @@ The complete reference for `ta`: installation options, building from source, the
 - [Test](#test)
   - [Self-test suite](#self-test-suite)
 - [Usage](#usage)
+  - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
   - [Schema](#schema)
 - [Case files](#case-files)
@@ -111,6 +112,8 @@ failure bundle under `.ta/failures`, which git ignores; add
 ta run cases/login.yaml
 ta run cases/
 ta run cases/ --var token=abc --var user=alice
+ta run cases/ --layer api --tag smoke
+ta run cases/ --tag smoke --skip-tag slow
 ta run cases/ --bundle-dir /tmp/ta-failures
 ta run cases/ --no-bundle
 ta --output json run cases/
@@ -134,6 +137,68 @@ repeated. It overrides a variable of the same name in the case's `vars:`. A
 
 `--bundle-dir <directory>` changes where failure bundles are written (see
 [Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
+
+### Classification and filtering
+
+A case may describe where it belongs, so one repository can hold interface,
+command-line, interface and future database cases side by side:
+
+```yaml
+name: Login returns a token
+project: shop
+suite: smoke
+layer: api
+tags: [smoke, fast]
+steps:
+  - http.request:
+      url: http://127.0.0.1:8080/health
+    expect:
+      - path: $.status
+        equals: 200
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `project` | string | Project the case belongs to. |
+| `suite` | string | Suite the case belongs to, for example a smoke or regression suite. |
+| `layer` | string | Layer the case exercises. Free-form: this project suggests `unit`, `api`, `cli`, `ui`, `integration`, `e2e` and `db`, and a game, chip or systems project uses its own values. |
+| `tags` | list of strings | Cross-cutting labels. Duplicates are a case error. |
+
+All four fields are optional and are never interpolated: write the value you
+mean, and a `${name}` inside one stays literal. An empty value is a case error
+(exit 3), as is a repeated tag.
+
+`ta run` selects cases with `--project`, `--suite`, `--layer`, `--tag` and
+excludes them with `--skip-tag`; each option may be repeated:
+
+```sh
+ta run cases/ --layer api
+ta run cases/ --project shop --project billing
+ta run cases/ --layer api --layer cli --tag smoke
+ta run cases/ --tag smoke --skip-tag slow
+```
+
+- Values of one option are alternatives: `--layer api --layer cli` runs both
+  layers.
+- Different options must all match: `--layer api --tag smoke` runs cases that
+  are in the api layer **and** carry the smoke tag.
+- `--skip-tag` wins over every other option: a case with any skipped tag does
+  not run.
+- Matching is exact and case-sensitive.
+- A case that does not declare a field is not selected by a filter on that
+  field: with `--layer api`, a case without `layer` does not run.
+
+Every discovered file is still parsed and validated, whether or not the filters
+select it. A filter never lets an invalid case file pass: if a filtered-out file
+is broken, the run exits 3 and no case runs.
+
+When the filters select no case, `ta run` exits 2 and the message names the
+options that were used and the `project`, `suite`, `layer` and tag values the
+discovered cases actually have, so a typo is visible without running anything.
+A run without filters is not affected by this rule.
+
+Filtered-out cases do not appear in the result; the summary counts them as
+`filtered` (text) or `summary.filtered` (JSON).
 
 ### Linting
 
@@ -165,9 +230,23 @@ Checked 2 files: 2 errors.
       "file": "cases/login.yaml",
       "message": "step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step"
     }
+  ],
+  "cases": [
+    {
+      "file": "cases/smoke.yaml",
+      "name": "Login returns a token",
+      "project": "shop",
+      "suite": "smoke",
+      "layer": "api",
+      "tags": ["smoke", "fast"]
+    }
   ]
 }
 ```
+
+`cases` lists every case that parsed, with its classification, so an agent can
+discover the available values without running anything. `project`, `suite` and
+`layer` are `null` when the case does not declare them.
 
 The exit code is 0 when every case is valid and 3 when anything is invalid,
 including a path that cannot be read and a directory with no case files. Use
@@ -177,13 +256,15 @@ running it.
 ### Schema
 
 `ta schema` prints a [JSON Schema](https://json-schema.org/) (draft 2020-12) for
-one case file. The schema follows the parser: only `name`, `vars` and `steps`
-at the top level; one registered step name per step, plus optional `expect` and
-`save`; the four comparisons with their value types; and each step's argument
-schema under `$defs`, together with the step's description. The registry builds
-it, so a build with fewer drivers describes fewer steps. `--output text` (the
-default) pretty-prints the schema and `--output json` prints it compactly; both
-are the same document, and the command exits 0.
+one case file. The schema follows the parser: only `name`, `project`, `suite`,
+`layer`, `tags`, `vars` and `steps` at the top level; one registered step name
+per step, plus optional `expect` and `save`; the four comparisons with their
+value types; and each step's argument schema under `$defs`, together with the
+step's description. The classification fields are optional strings that cannot
+be empty, and `tags` is an array of unique non-empty strings. The registry
+builds it, so a build with fewer drivers describes fewer steps. `--output text`
+(the default) pretty-prints the schema and `--output json` prints it compactly;
+both are the same document, and the command exits 0.
 
 Save the output as a file next to the cases and point an editor at it. For
 [yaml-language-server](https://github.com/redhat-developer/yaml-language-server),
@@ -244,7 +325,9 @@ steps:
 ```
 
 Unknown fields in a case file, unregistered step names, step arguments that do
-not match the step's schema and undefined variables are all case errors.
+not match the step's schema and undefined variables are all case errors. A case
+may also declare `project`, `suite`, `layer` and `tags`; see
+[Classification and filtering](#classification-and-filtering).
 
 ### Variables
 
@@ -365,8 +448,15 @@ pass also leaves a directory that an agent can read afterwards:
 | `ta_version` | Version of `ta` that wrote the bundle. |
 | `case_file` | Case file as given on the command line. |
 | `case_name` | Name of the case. |
+| `project` | Project the case declares, or `null`. |
+| `suite` | Suite the case declares, or `null`. |
+| `layer` | Layer the case declares, or `null`. |
+| `tags` | Tags the case declares, or `[]`. |
 | `status` | `failed` or `error`. |
 | `created_at` | Unix milliseconds. |
+
+`schema_version` stays `1`: the classification fields are an addition to the
+layout, and a reader must ignore fields it does not know.
 
 A case directory is staged under `.tmp-…` in the same parent, renamed into
 place, and only then does `meta.json` appear. **A directory without `meta.json`
@@ -393,7 +483,7 @@ FAIL cases/login.yaml [Login returns a token] 6 ms
   http.request: 1 of 2 assertions failed
     $.status equals 201 (actual 200)
   bundle: .ta/failures/1763000000123-4242/0-login-returns-a-token
-Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 7 ms
+Summary: 1 case (0 passed, 1 failed, 0 errors, 0 filtered), 2 steps (1 passed, 1 failed, 0 errors, 0 skipped), 7 ms
 ```
 
 `--output json` writes exactly one JSON object to standard output:
@@ -403,6 +493,7 @@ Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 e
   "ok": false,
   "summary": {
     "cases": 1,
+    "filtered": 0,
     "cases_passed": 0,
     "cases_failed": 1,
     "cases_errored": 0,
@@ -417,6 +508,10 @@ Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 e
     {
       "file": "cases/login.yaml",
       "name": "Login returns a token",
+      "project": "shop",
+      "suite": "smoke",
+      "layer": "api",
+      "tags": ["smoke", "fast"],
       "status": "failed",
       "duration_ms": 6,
       "bundle": ".ta/failures/1763000000123-4242/0-login-returns-a-token",
@@ -443,10 +538,15 @@ Summary: 1 case (0 passed, 1 failed, 0 errors), 2 steps (1 passed, 1 failed, 0 e
 
 `bundle` is the directory of the case's failure bundle, or `null` when the case
 passed or bundles are off. `bundle_errors` lists the bundles that could not be
-written; they never change the exit code.
+written; they never change the exit code. Every case also carries its
+`project`, `suite`, `layer` (`null` when not declared) and `tags` (`[]` when
+none), and `summary.filtered` counts the cases the filters excluded.
 
 When no case can run, `cases` is empty and `errors` lists one entry per invalid
-file, with `file`, `message` and `kind`. Diagnostics never go to standard output.
+file, with `file`, `message` and `kind`. When the filters select no case,
+`cases` and `errors` are empty, `ok` is `false`, `filter_error` holds the message
+that names the filters and the available values, and the process exits 2.
+Diagnostics never go to standard output.
 
 ## Exit codes
 
@@ -454,7 +554,7 @@ file, with `file`, `message` and `kind`. Diagnostics never go to standard output
 | ---: | --- |
 | 0 | Every case ran and passed |
 | 1 | At least one case failed an assertion or could not finish a step |
-| 2 | Command-line usage error |
+| 2 | Command-line usage error, including filters that select no case |
 | 3 | Invalid case file, invalid step arguments, unknown step or undefined variable |
 | 4 | Environment error (for example an unreachable target) |
 | 5 | Timeout |

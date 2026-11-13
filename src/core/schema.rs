@@ -1,10 +1,11 @@
 //! JSON Schema for the case file format.
 //!
 //! The schema mirrors the rules `case::parse` enforces: the top level has
-//! exactly `name`, `vars` and `steps`; a step carries exactly one registered
-//! step name plus optional `expect` and `save`; and every assertion uses one of
-//! the four comparisons. Step argument schemas come from the registry, so a
-//! step's declared schema and the exported schema cannot drift apart.
+//! exactly `name`, the four classification fields, `vars` and `steps`; a step
+//! carries exactly one registered step name plus optional `expect` and `save`;
+//! and every assertion uses one of the four comparisons. Step argument schemas
+//! come from the registry, so a step's declared schema and the exported schema
+//! cannot drift apart.
 
 use serde_json::{Map, Value, json};
 
@@ -41,7 +42,7 @@ pub fn case_schema(registry: &Registry) -> Value {
     json!({
         "$schema": crate::CASE_SCHEMA_DIALECT,
         "title": "ta case file",
-        "description": "A declarative test case: a name, optional variables and an ordered list of steps.",
+        "description": "A declarative test case: a name, optional classification, optional variables and an ordered list of steps.",
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "steps"],
@@ -51,6 +52,30 @@ pub fn case_schema(registry: &Registry) -> Value {
                 // string, number or boolean scalar there.
                 "type": ["string", "number", "boolean"],
                 "description": "Human-readable case name shown in reports."
+            },
+            "project": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Project the case belongs to. Select it with `--project`."
+            },
+            "suite": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Suite the case belongs to. Select it with `--suite`."
+            },
+            "layer": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Free-form layer of the case, for example `unit`, `api`, `cli`, `ui`, `integration`, `e2e` or `db`. Select it with `--layer`."
+            },
+            "tags": {
+                "type": "array",
+                "description": "Tags of the case. Select them with `--tag` and exclude them with `--skip-tag`.",
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "minLength": 1
+                }
             },
             "vars": {
                 "type": "object",
@@ -198,6 +223,30 @@ mod tests {
             "the parser accepts every YAML scalar as the case name"
         );
         assert_eq!(schema["properties"]["steps"]["minItems"], 1);
+    }
+
+    #[test]
+    fn the_classification_fields_are_optional_strings_and_tags_are_unique() {
+        let schema = case_schema(&Registry::new());
+        let properties = &schema["properties"];
+
+        for field in ["project", "suite", "layer"] {
+            assert_eq!(properties[field]["type"], "string", "{field}");
+            assert_eq!(properties[field]["minLength"], 1, "{field}");
+        }
+        assert_eq!(properties["tags"]["type"], "array");
+        assert_eq!(properties["tags"]["uniqueItems"], true);
+        assert_eq!(properties["tags"]["items"]["type"], "string");
+        assert_eq!(properties["tags"]["items"]["minLength"], 1);
+        assert!(
+            schema["required"]
+                .as_array()
+                .is_some_and(|required| !required.iter().any(|field| {
+                    matches!(field.as_str(), Some("project" | "suite" | "layer" | "tags"))
+                })),
+            "classification must stay optional: {}",
+            schema["required"]
+        );
     }
 
     #[test]

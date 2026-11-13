@@ -67,6 +67,10 @@ fn validator(schema: &'static Value) -> jsonschema::Validator {
 fn valid_instance() -> Value {
     json!({
         "name": "Example",
+        "project": "shop",
+        "suite": "smoke",
+        "layer": "api",
+        "tags": ["smoke", "fast"],
         "vars": {"port": 8080, "verbose": true},
         "steps": [
             {
@@ -102,6 +106,40 @@ fn the_schema_is_one_json_object_in_both_output_modes() {
 #[test]
 fn the_schema_is_valid_against_the_2020_12_meta_schema() {
     jsonschema::meta::validate(schema()).expect("the schema must satisfy its own meta-schema");
+}
+
+#[cfg(feature = "cli")]
+#[test]
+fn the_classification_fields_match_the_parser() {
+    let validator = validator(schema());
+    let instance = valid_instance();
+    assert!(
+        validator.is_valid(&instance),
+        "the parser accepts classification, so the schema must too"
+    );
+
+    for field in ["project", "suite", "layer"] {
+        let mut empty = instance.clone();
+        empty[field] = json!("");
+        assert!(
+            !validator.is_valid(&empty),
+            "the parser rejects an empty `{field}`, so the schema must too"
+        );
+    }
+
+    let mut duplicate = instance.clone();
+    duplicate["tags"] = json!(["smoke", "smoke"]);
+    assert!(
+        !validator.is_valid(&duplicate),
+        "the parser rejects a duplicate tag, so the schema must too"
+    );
+
+    let mut empty_tag = instance.clone();
+    empty_tag["tags"] = json!([""]);
+    assert!(
+        !validator.is_valid(&empty_tag),
+        "the parser rejects an empty tag, so the schema must too"
+    );
 }
 
 #[cfg(feature = "cli")]

@@ -102,6 +102,8 @@ The failed case says which assertion failed and what the real value was, and its
 
 Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html). Variables: `vars`, `save` and `--var name=value`, referenced as `${name}`.
 
+Classify a case with `project`, `suite`, `layer` and `tags`, then run only what you need with `--project`, `--suite`, `--layer`, `--tag` and `--skip-tag`.
+
 ## For coding agents
 
 `ta` is meant to be driven by an agent without a human reading the terminal:

@@ -131,6 +131,10 @@ fn write_meta(dir: &Path, case: &CaseReport) -> Result<(), String> {
             "ta_version": env!("CARGO_PKG_VERSION"),
             "case_file": case.file.display().to_string(),
             "case_name": case.name,
+            "project": case.project,
+            "suite": case.suite,
+            "layer": case.layer,
+            "tags": case.tags,
             "status": case.status.as_str(),
             "created_at": now_millis(),
         }),
@@ -234,6 +238,10 @@ mod tests {
         CaseReport {
             file,
             name: "Wrong exit code".to_string(),
+            project: Some("shop".to_string()),
+            suite: Some("smoke".to_string()),
+            layer: Some("cli".to_string()),
+            tags: vec!["smoke".to_string(), "fast".to_string()],
             status: CaseStatus::Failed,
             duration: Duration::from_millis(3),
             steps: vec![StepReport {
@@ -302,6 +310,10 @@ mod tests {
         assert_eq!(meta["schema_version"], json!(SCHEMA_VERSION));
         assert_eq!(meta["ta_version"], json!(env!("CARGO_PKG_VERSION")));
         assert_eq!(meta["case_name"], json!("Wrong exit code"));
+        assert_eq!(meta["project"], json!("shop"));
+        assert_eq!(meta["suite"], json!("smoke"));
+        assert_eq!(meta["layer"], json!("cli"));
+        assert_eq!(meta["tags"], json!(["smoke", "fast"]));
         assert_eq!(meta["status"], json!("failed"));
         assert!(
             meta["created_at"].as_u64().is_some_and(|millis| millis > 0),
