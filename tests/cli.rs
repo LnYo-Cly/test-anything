@@ -929,7 +929,7 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
 }
 
 #[test]
-#[cfg(feature = "cli")]
+#[cfg(all(feature = "cli", feature = "http"))]
 fn a_cli_step_that_exceeds_its_timeout_exits_five() {
     let server = TestServer::start();
     let dir = TempDir::new("cli-timeout");

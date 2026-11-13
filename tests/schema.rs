@@ -5,9 +5,9 @@
 
 mod support;
 
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(feature = "cli")]
 use std::fs;
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::LazyLock;
@@ -57,7 +57,7 @@ fn schema() -> &'static Value {
     &SCHEMA
 }
 
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(feature = "cli")]
 fn validator(schema: &'static Value) -> jsonschema::Validator {
     jsonschema::validator_for(schema).expect("the emitted schema must compile")
 }
