@@ -2,8 +2,9 @@
 
 mod support;
 
+use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
 use support::{TempDir, TestServer, closed_port};
@@ -647,5 +648,109 @@ fn a_missing_case_file_exits_three() {
         stderr(&output).contains("does-not-exist.yaml"),
         "expected the path in the message, got: {:?}",
         stderr(&output)
+    );
+}
+
+/// Reads one chunk from a child pipe and then closes it.
+///
+/// The tests below write far more than a pipe buffer, so closing after the
+/// first chunk makes the next write in the child fail with a broken pipe.
+fn close_after_first_read(mut pipe: impl Read) {
+    let mut buffer = [0_u8; 64];
+    let read = pipe.read(&mut buffer).expect("failed to read the pipe");
+    assert!(read > 0, "expected output before closing the pipe");
+}
+
+#[test]
+fn a_closed_stdout_pipe_does_not_panic_and_keeps_the_run_exit_code() {
+    let server = TestServer::start();
+    let dir = TempDir::new("broken-stdout");
+    // A failing assertion whose expected value is far larger than a pipe
+    // buffer, so `ta` is still writing when the reader closes the pipe.
+    let expected = "x".repeat(512 * 1024);
+    let case = dir.write(
+        "huge-expected.yaml",
+        &format!(
+            r#"
+name: Huge expected value
+steps:
+  - http.request:
+      url: {base}/health
+    expect:
+      - path: $.body.status
+        equals: "{expected}"
+"#,
+            base = server.url("")
+        ),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ta"))
+        .args(["run", path_str(&case)])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run the ta binary");
+
+    close_after_first_read(child.stdout.take().expect("stdout must be piped"));
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for the ta binary");
+
+    let stderr = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a closed pipe must keep the run exit code, got {:?} with stderr: {stderr:?}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "ta panicked instead of ending quietly: {stderr:?}"
+    );
+}
+
+#[test]
+fn a_closed_stderr_pipe_does_not_panic_and_keeps_the_invalid_case_exit_code() {
+    let dir = TempDir::new("broken-stderr");
+    // The error message echoes the invalid JSON path, so standard error is far
+    // larger than a pipe buffer.
+    let invalid_path = format!("$.{}[", "x".repeat(256 * 1024));
+    let case = dir.write(
+        "huge-path.yaml",
+        &format!(
+            r#"
+name: Huge invalid path
+steps:
+  - http.request:
+      url: http://127.0.0.1:1/health
+    expect:
+      - path: "{invalid_path}"
+        exists: true
+"#
+        ),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ta"))
+        .args(["run", path_str(&case)])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run the ta binary");
+
+    close_after_first_read(child.stderr.take().expect("stderr must be piped"));
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for the ta binary");
+
+    let stderr = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "a closed pipe must keep the invalid-case exit code, got {:?} with stderr: {stderr:?}",
+        output.status.code()
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "ta panicked instead of ending quietly: {stderr:?}"
     );
 }
