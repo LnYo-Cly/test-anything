@@ -379,6 +379,9 @@ Redaction has limits that matter when you choose a value:
 - **Short secrets hide unrelated text.** A secret of `1` replaces every `1` in
   the output, including digits of a status code or a duration. Use a value that
   is long enough to be distinctive.
+- **Only values `ta` read are secrets.** A program a case starts inherits the
+  whole environment. If it prints a variable that no `${env:NAME}` reference
+  read, `ta` never saw that value and cannot redact it.
 - **Encoded secrets are not recognized.** If a program base64-encodes,
   URL-encodes or otherwise transforms the value, the result no longer matches
   and appears as it is. The same holds for a value a program splits or
