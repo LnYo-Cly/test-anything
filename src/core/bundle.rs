@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use crate::core::output;
+use crate::core::paths;
 use crate::core::report::CaseReport;
 
 /// Version of the bundle layout this build writes.
@@ -52,7 +53,7 @@ impl FailureBundles {
         std::fs::metadata(&case.file).map_err(|error| {
             failure(
                 case,
-                format!("could not read `{}`: {error}", case.file.display()),
+                format!("could not read `{}`: {error}", paths::display(&case.file)),
             )
         })?;
 
@@ -68,7 +69,7 @@ impl FailureBundles {
         if let Err(error) = std::fs::create_dir(&staging) {
             return Err(failure(
                 case,
-                format!("could not create `{}`: {error}", staging.display()),
+                format!("could not create `{}`: {error}", paths::display(&staging)),
             ));
         }
 
@@ -82,8 +83,8 @@ impl FailureBundles {
                 case,
                 format!(
                     "could not move `{}` to `{}`: {error}",
-                    staging.display(),
-                    final_dir.display()
+                    paths::display(&staging),
+                    paths::display(&final_dir)
                 ),
             ));
         }
@@ -111,8 +112,8 @@ fn stage(staging: &Path, case: &CaseReport, final_dir: &Path) -> Result<(), Stri
     std::fs::copy(&case.file, &case_copy).map_err(|error| {
         format!(
             "could not copy `{}` to `{}`: {error}",
-            case.file.display(),
-            case_copy.display()
+            paths::display(&case.file),
+            paths::display(&case_copy)
         )
     })?;
 
@@ -129,7 +130,7 @@ fn write_meta(dir: &Path, case: &CaseReport) -> Result<(), String> {
         &json!({
             "schema_version": SCHEMA_VERSION,
             "ta_version": env!("CARGO_PKG_VERSION"),
-            "case_file": case.file.display().to_string(),
+            "case_file": paths::display(&case.file),
             "case_name": case.name,
             "project": case.project,
             "suite": case.suite,
@@ -143,9 +144,9 @@ fn write_meta(dir: &Path, case: &CaseReport) -> Result<(), String> {
 
 fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("could not render `{}`: {error}", path.display()))?;
+        .map_err(|error| format!("could not render `{}`: {error}", paths::display(path)))?;
     std::fs::write(path, text + "\n")
-        .map_err(|error| format!("could not write `{}`: {error}", path.display()))
+        .map_err(|error| format!("could not write `{}`: {error}", paths::display(path)))
 }
 
 /// Creates `<root>/<millis>-<pid>` and returns it.
@@ -154,7 +155,7 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
 /// same millisecond never writes into the directories of the first one.
 fn create_run_directory(root: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(root)
-        .map_err(|error| format!("could not create `{}`: {error}", root.display()))?;
+        .map_err(|error| format!("could not create `{}`: {error}", paths::display(root)))?;
     let base = format!("{}-{}", now_millis(), std::process::id());
     for attempt in 1..=100 {
         let candidate = if attempt == 1 {
@@ -168,14 +169,14 @@ fn create_run_directory(root: &Path) -> Result<PathBuf, String> {
             Err(error) => {
                 return Err(format!(
                     "could not create `{}`: {error}",
-                    candidate.display()
+                    paths::display(&candidate)
                 ));
             }
         }
     }
     Err(format!(
         "could not find a free run directory name under `{}`",
-        root.display()
+        paths::display(root)
     ))
 }
 
@@ -328,7 +329,7 @@ mod tests {
         assert_eq!(report["status"], json!("failed"));
         assert_eq!(
             report["bundle"],
-            json!(bundle.display().to_string()),
+            json!(paths::display(&bundle)),
             "the bundled report must point at its own directory"
         );
 

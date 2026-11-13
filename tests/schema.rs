@@ -241,6 +241,206 @@ fn an_unknown_comparison_is_rejected() {
 
 #[cfg(feature = "cli")]
 #[test]
+fn a_cli_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
+    let definition = step_definition("cli.run");
+    assert_eq!(
+        definition.args_schema["properties"]["timeout_ms"]["minimum"], 1,
+        "the step schema must declare the bound validate enforces: {}",
+        definition.args_schema
+    );
+    assert_eq!(
+        schema()["$defs"]["cli.run"]["properties"]["timeout_ms"]["minimum"],
+        1,
+        "`ta schema` must carry the same bound"
+    );
+
+    let zero = json!({"command": "ta", "timeout_ms": 0});
+    assert!(
+        (definition.validate)(&zero).is_err(),
+        "validate must reject `timeout_ms: 0`"
+    );
+    assert!(
+        !jsonschema::is_valid(&definition.args_schema, &zero),
+        "the schema must reject `timeout_ms: 0`: {}",
+        definition.args_schema
+    );
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn an_http_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
+    let definition = step_definition("http.request");
+    assert_eq!(
+        definition.args_schema["properties"]["timeout_ms"]["minimum"], 1,
+        "the step schema must declare the bound validate enforces: {}",
+        definition.args_schema
+    );
+    assert_eq!(
+        schema()["$defs"]["http.request"]["properties"]["timeout_ms"]["minimum"],
+        1,
+        "`ta schema` must carry the same bound"
+    );
+
+    let zero = json!({"url": "http://127.0.0.1:1/health", "timeout_ms": 0});
+    assert!(
+        (definition.validate)(&zero).is_err(),
+        "validate must reject `timeout_ms: 0`"
+    );
+    assert!(
+        !jsonschema::is_valid(&definition.args_schema, &zero),
+        "the schema must reject `timeout_ms: 0`: {}",
+        definition.args_schema
+    );
+}
+
+/// A registered step definition, for tests that compare the schema with
+/// `validate`.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition {
+    built_in_registry()
+        .get(name)
+        .unwrap_or_else(|| panic!("`{name}` must be registered"))
+        .clone()
+}
+
+/// Every registered step definition, keyed by name.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn built_in_registry() -> test_anything::core::registry::Registry {
+    let mut registry = test_anything::core::registry::Registry::new();
+    test_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
+    registry
+}
+
+/// Arguments each built-in step accepts, before one argument is overridden.
+///
+/// The values only have to pass `validate`; it checks arguments without
+/// starting the program or opening a connection.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn valid_arguments(step: &str) -> Value {
+    match step {
+        "cli.run" => json!({"command": "ta"}),
+        "http.request" => json!({"url": "http://127.0.0.1:1/health"}),
+        other => panic!("add the valid arguments of `{other}` to this test"),
+    }
+}
+
+/// The bounds of one argument schema that this test can turn into a value.
+///
+/// A bound that the schema can express but this list cannot construct is
+/// caught by the assertion on the constructed value, which fails loudly.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn declared_bounds(schema: &Value) -> Vec<(&'static str, Value)> {
+    ["minimum", "minLength", "pattern"]
+        .into_iter()
+        .filter_map(|keyword| schema.get(keyword).map(|bound| (keyword, bound.clone())))
+        .collect()
+}
+
+/// A value that violates one bound, and a value on the bound when one can be
+/// constructed generically.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn bound_values(keyword: &str, bound: &Value) -> (Value, Option<Value>) {
+    match keyword {
+        "minimum" => {
+            let minimum = bound
+                .as_i64()
+                .unwrap_or_else(|| panic!("`minimum` must be an integer, got: {bound}"));
+            (json!(minimum - 1), Some(json!(minimum)))
+        }
+        "minLength" => {
+            let minimum = bound
+                .as_u64()
+                .unwrap_or_else(|| panic!("`minLength` must be an integer, got: {bound}"));
+            let length = usize::try_from(minimum).unwrap_or(usize::MAX);
+            (
+                json!("x".repeat(length.saturating_sub(1))),
+                Some(json!("x".repeat(length))),
+            )
+        }
+        // No generic string matches an arbitrary pattern, so only the
+        // violating side is constructed: the empty string is refused by every
+        // pattern this project writes, and the assertion says so otherwise.
+        "pattern" => (json!(""), None),
+        other => panic!("add a value for the `{other}` bound to this test"),
+    }
+}
+
+/// The schema and `validate` agree on every bound a step declares.
+///
+/// This is the regression gate for a class of drift that has now happened three
+/// times: the schema accepted a value that the driver later refused (`name`, a
+/// blank classification value, `timeout_ms: 0`). A step's argument schema and
+/// its `validate` function are two contracts for the same arguments, and
+/// neither may be looser than the other. The reverse direction, a value that
+/// `validate` refuses while the schema accepts it, is covered by the two
+/// `*_timeout_of_zero_*` tests above.
+#[cfg(any(feature = "cli", feature = "http"))]
+#[test]
+fn every_declared_argument_bound_is_enforced_by_validate() {
+    let registry = built_in_registry();
+    let mut checked = 0;
+
+    for name in registry.names() {
+        let definition = registry
+            .get(name)
+            .expect("every listed step must be registered");
+        let base = valid_arguments(name);
+        assert!(
+            (definition.validate)(&base).is_ok(),
+            "the base arguments for `{name}` must be valid: {base}"
+        );
+        assert!(
+            jsonschema::is_valid(&definition.args_schema, &base),
+            "the schema must accept the base arguments for `{name}`: {base}"
+        );
+
+        let properties = definition.args_schema["properties"]
+            .as_object()
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{name}` must declare its arguments as object properties: {}",
+                    definition.args_schema
+                )
+            });
+        for (argument, schema) in properties {
+            for (keyword, bound) in declared_bounds(schema) {
+                let (violating, allowed) = bound_values(keyword, &bound);
+
+                let mut args = base.clone();
+                args[argument] = violating;
+                assert!(
+                    !jsonschema::is_valid(&definition.args_schema, &args),
+                    "the test must build a value that violates `{keyword}` for `{argument}` of `{name}`: {args}"
+                );
+                assert!(
+                    (definition.validate)(&args).is_err(),
+                    "`{name}` declares `{keyword}: {bound}` for `{argument}`, but validate accepts {args}"
+                );
+
+                // The value on the boundary itself must be accepted, so that
+                // `ta schema` does not promise a value that `ta run` refuses.
+                if let Some(allowed) = allowed {
+                    let mut args = base.clone();
+                    args[argument] = allowed;
+                    assert!(
+                        (definition.validate)(&args).is_ok(),
+                        "`{name}` declares `{keyword}: {bound}` for `{argument}`, but validate rejects {args}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    let drivers = usize::from(cfg!(feature = "cli")) + usize::from(cfg!(feature = "http"));
+    assert!(
+        checked >= drivers,
+        "expected at least one bounded argument per built-in driver, checked {checked}"
+    );
+}
+
+#[cfg(feature = "cli")]
+#[test]
 fn an_unknown_step_argument_is_rejected() {
     let validator = validator(schema());
     let instance = json!({

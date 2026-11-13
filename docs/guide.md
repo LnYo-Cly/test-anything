@@ -210,12 +210,17 @@ accepts before it starts; problems that only appear while a step runs, such as
 an unreachable target, are outside lint's scope.
 
 Unlike a run, lint reports every problem in every file instead of stopping at
-the first one. Text output writes one line per problem as `file: message` and
-ends with a summary:
+the first one. Text output writes `file: message` for each problem and ends with
+a summary. A YAML grammar error keeps the parser's source snippet, including its
+line breaks and caret line, so the reported location can be read directly:
 
 ```text
 cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
-cases/logout.yaml: line 4: unknown field `naem`
+cases/logout.yaml: line 4 column 1: unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
+ --> <input>:4:1
+  |
+4 | naem: typo
+  | ^ unknown field `naem`, expected one of name, vars, project, suite, layer, tags, steps
 Checked 2 files: 2 errors.
 ```
 
@@ -288,11 +293,12 @@ Or point the server's `yaml.schemas` setting at the file once:
 }
 ```
 
-The schema describes the shape of a case, not every check: undefined variables,
-the syntax of JSON paths, and value constraints that a step checks itself (for
-example a timeout of at least 1) still need `ta lint`. A build with
-`--no-default-features` still prints a valid schema, but no step is registered,
-so the step item accepts nothing.
+The schema describes the shape of a case, not every check: undefined variables
+and the syntax of JSON paths still need `ta lint`. A bound that a step declares
+for an argument, such as a timeout of at least 1, is in the schema as well: it
+appears as `minimum` in the step's `$defs` entry, and `ta lint` enforces the
+same bound. A build with `--no-default-features` still prints a valid schema,
+but no step is registered, so the step item accepts nothing.
 
 ## Case files
 
@@ -446,7 +452,7 @@ pass also leaves a directory that an agent can read afterwards:
 | --- | --- |
 | `schema_version` | Version of the layout, currently `1`. |
 | `ta_version` | Version of `ta` that wrote the bundle. |
-| `case_file` | Case file as given on the command line. |
+| `case_file` | Case file, with `/` as the separator. |
 | `case_name` | Name of the case. |
 | `project` | Project the case declares, or `null`. |
 | `suite` | Suite the case declares, or `null`. |
@@ -541,6 +547,10 @@ passed or bundles are off. `bundle_errors` lists the bundles that could not be
 written; they never change the exit code. Every case also carries its
 `project`, `suite`, `layer` (`null` when not declared) and `tags` (`[]` when
 none), and `summary.filtered` counts the cases the filters excluded.
+
+Every path that `ta` prints, in text output, in JSON and in a failure bundle,
+uses `/` as the separator on every platform, so a path from the output can be
+copied back unchanged.
 
 When no case can run, `cases` is empty and `errors` lists one entry per invalid
 file, with `file`, `message` and `kind`. When the filters select no case,

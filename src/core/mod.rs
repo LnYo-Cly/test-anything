@@ -11,6 +11,7 @@ pub mod case;
 pub mod events;
 pub mod filter;
 pub mod output;
+pub mod paths;
 pub mod registry;
 pub mod report;
 pub mod runner;

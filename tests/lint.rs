@@ -49,6 +49,11 @@ fn path_str(path: &Path) -> &str {
     path.to_str().expect("test paths must be valid UTF-8")
 }
 
+/// A path the way `ta` reports it: `/` separated on every platform.
+fn reported(path: &Path) -> String {
+    path_str(path).replace('\\', "/")
+}
+
 fn json_stdout(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("stdout must contain exactly one JSON value")
 }
@@ -112,11 +117,55 @@ fn a_syntax_error_exits_three_and_reports_its_location() {
         stdout.contains("broken.yaml"),
         "the message must name the file, got: {stdout:?}"
     );
-    assert_eq!(
-        stdout.lines().count(),
-        2,
-        "one error line and one summary line, got: {stdout:?}"
+    // The parser shows the source line under the error. Lint keeps that
+    // snippet as the parser wrote it, because a caret line is what makes the
+    // location readable.
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert!(
+        lines.len() > 2,
+        "the snippet must keep its line breaks, got: {stdout:?}"
     );
+    assert!(
+        lines.iter().any(|line| line.contains('^')),
+        "the snippet must keep the caret line, got: {stdout:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.trim_end().ends_with("- cli.run: [")),
+        "the snippet must keep the source line on its own line, got: {stdout:?}"
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some("Checked 1 file: 1 error."),
+        "the summary must stay the last line, got: {stdout:?}"
+    );
+}
+
+/// A `/`-separated directory can be pasted back from the output on Windows.
+#[test]
+fn reported_paths_use_forward_slashes_only() {
+    let dir = TempDir::new("lint-path-separators");
+    dir.write("broken.yaml", "name: Broken\nsteps:\n  - cli.run: [\n");
+    let given = path_str(dir.path()).replace('\\', "/");
+
+    let text = run_ta(&["lint", &given]);
+    assert_eq!(exit_code(&text), Some(3), "stderr: {:?}", stderr(&text));
+    assert!(
+        !stdout(&text).contains('\\'),
+        "lint text must use `/` only, got: {:?}",
+        stdout(&text)
+    );
+
+    let json = run_ta(&["--output", "json", "lint", &given]);
+    let value = json_stdout(&json);
+    for error in value["errors"].as_array().expect("errors must be an array") {
+        let file = error["file"].as_str().expect("every error names a file");
+        assert!(
+            !file.contains('\\'),
+            "the JSON `file` must use `/` only, got: {file}"
+        );
+    }
 }
 
 #[test]
@@ -134,7 +183,7 @@ fn an_unknown_field_exits_three_with_a_line_number() {
     assert!(stdout.contains("naem"), "got: {stdout:?}");
     assert!(stdout.contains("line 2"), "got: {stdout:?}");
     assert!(
-        stdout.contains(&format!("{}: ", path_str(&case))),
+        stdout.contains(&format!("{}: ", reported(&case))),
         "every error must start with the file, got: {stdout:?}"
     );
 }
