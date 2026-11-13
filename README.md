@@ -8,6 +8,10 @@ coding agents can read. Status: early development. `ta run` executes YAML cases
 with the built-in `http.request` step; `ta lint` and `ta schema` are not
 implemented yet and exit with code 9.
 
+## Install
+
+Download a prebuilt binary for Linux, macOS or Windows from [GitHub Releases](https://github.com/LnYo-Cly/test-anything/releases), extract it, and put `ta` on your `PATH`. Each release includes a `SHA256SUMS` file.
+
 ## Build
 
 Requires Rust 1.89 or newer (edition 2024).
