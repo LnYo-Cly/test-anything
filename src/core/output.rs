@@ -11,6 +11,7 @@ use crate::core::assert::AssertionReport;
 use crate::core::case::{CaseError, LoadedCase};
 use crate::core::paths;
 use crate::core::report::{CaseReport, CaseStatus, Problem, RunOutcome, StepReport, Summary};
+use crate::core::secrets::Secrets;
 
 /// How results are rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,17 +82,17 @@ impl LintReport {
 }
 
 /// Renders a lint result.
-pub fn render_lint(report: &LintReport, format: Format) -> Rendered {
+pub fn render_lint(report: &LintReport, format: Format, secrets: &Secrets) -> Rendered {
     match format {
         Format::Json => Rendered {
-            stdout: format!("{}\n", json_lint(report)),
+            stdout: format!("{}\n", secrets.redact_json(&json_lint(report))),
             stderr: String::new(),
         },
-        Format::Text => text_lint(report),
+        Format::Text => text_lint(report, secrets),
     }
 }
 
-fn text_lint(report: &LintReport) -> Rendered {
+fn text_lint(report: &LintReport, secrets: &Secrets) -> Rendered {
     let mut stdout = String::new();
     for error in &report.errors {
         // The parser's message carries a source snippet with its own line
@@ -112,7 +113,7 @@ fn text_lint(report: &LintReport) -> Rendered {
         noun(report.errors.len(), "error", "errors"),
     ));
     Rendered {
-        stdout,
+        stdout: secrets.redact(&stdout),
         stderr: String::new(),
     }
 }
@@ -163,29 +164,34 @@ pub fn render_schema(schema: &Value, format: Format) -> Rendered {
 }
 
 /// Renders an outcome in the requested format.
-pub fn render(outcome: &RunOutcome, format: Format) -> Rendered {
+///
+/// Every string that leaves the process goes through `secrets` here, so a
+/// value that came from the environment cannot reach the terminal even when a
+/// step, an assertion or an error message carries it. A failure bundle applies
+/// the same redaction before it writes its files.
+pub fn render(outcome: &RunOutcome, format: Format, secrets: &Secrets) -> Rendered {
     match format {
         Format::Json => Rendered {
-            stdout: format!("{}\n", json_report(outcome)),
+            stdout: format!("{}\n", secrets.redact_json(&json_report(outcome))),
             // Diagnostics never go to standard output, so a bundle that could
             // not be written is repeated on standard error in both formats.
             stderr: match outcome {
-                RunOutcome::Completed(report) => bundle_errors(report),
+                RunOutcome::Completed(report) => secrets.redact(&bundle_errors(report)),
                 RunOutcome::Rejected { .. } => String::new(),
-                RunOutcome::NoMatch { message } => format!("error: {message}\n"),
+                RunOutcome::NoMatch { message } => format!("error: {}\n", secrets.redact(message)),
             },
         },
-        Format::Text => text_report(outcome),
+        Format::Text => text_report(outcome, secrets),
     }
 }
 
-fn text_report(outcome: &RunOutcome) -> Rendered {
+fn text_report(outcome: &RunOutcome, secrets: &Secrets) -> Rendered {
     let report = match outcome {
         RunOutcome::Completed(report) => report,
         RunOutcome::NoMatch { message } => {
             return Rendered {
                 stdout: String::new(),
-                stderr: format!("error: {message}\n"),
+                stderr: format!("error: {}\n", secrets.redact(message)),
             };
         }
         RunOutcome::Rejected { errors } => {
@@ -199,7 +205,7 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
             }
             return Rendered {
                 stdout: String::new(),
-                stderr,
+                stderr: secrets.redact(&stderr),
             };
         }
     };
@@ -247,8 +253,8 @@ fn text_report(outcome: &RunOutcome) -> Rendered {
     ));
 
     Rendered {
-        stdout,
-        stderr: bundle_errors(report),
+        stdout: secrets.redact(&stdout),
+        stderr: secrets.redact(&bundle_errors(report)),
     }
 }
 
@@ -480,7 +486,7 @@ mod tests {
 
     #[test]
     fn text_lists_the_path_the_expected_value_and_the_actual_value() {
-        let rendered = render(&failing_outcome(), Format::Text);
+        let rendered = render(&failing_outcome(), Format::Text, &Secrets::new());
 
         assert!(rendered.stderr.is_empty());
         assert!(
@@ -510,7 +516,7 @@ mod tests {
 
     #[test]
     fn json_is_one_object_with_the_documented_fields() {
-        let rendered = render(&failing_outcome(), Format::Json);
+        let rendered = render(&failing_outcome(), Format::Json, &Secrets::new());
         let value: Value = serde_json::from_str(&rendered.stdout).expect("stdout must be JSON");
 
         assert_eq!(value["ok"], false);
@@ -547,7 +553,7 @@ mod tests {
         report.cases[0].bundle = Some(PathBuf::from(r"G:\cases\.ta\failures\1-0-Login"));
         let outcome = RunOutcome::Completed(report);
 
-        let json = render(&outcome, Format::Json);
+        let json = render(&outcome, Format::Json, &Secrets::new());
         let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
         assert_eq!(value["cases"][0]["file"], "G:/cases/login.yaml");
         assert_eq!(
@@ -555,7 +561,7 @@ mod tests {
             "G:/cases/.ta/failures/1-0-Login"
         );
 
-        let text = render(&outcome, Format::Text);
+        let text = render(&outcome, Format::Text, &Secrets::new());
         assert!(
             !text.stdout.contains('\\'),
             "text output must not mix separators, got: {}",
@@ -576,7 +582,7 @@ mod tests {
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
 
-        let text = render(&outcome, Format::Text);
+        let text = render(&outcome, Format::Text, &Secrets::new());
         assert!(
             text.stderr.contains("could not write the bundle"),
             "got: {}",
@@ -584,7 +590,7 @@ mod tests {
         );
         assert!(!text.stdout.contains("bundle:"), "got: {}", text.stdout);
 
-        let json = render(&outcome, Format::Json);
+        let json = render(&outcome, Format::Json, &Secrets::new());
         let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
         assert_eq!(value["bundle_errors"][0], "could not write the bundle");
         assert_eq!(value["cases"][0]["bundle"], Value::Null);
@@ -604,11 +610,11 @@ mod tests {
             }],
         };
 
-        let text = render(&outcome, Format::Text);
+        let text = render(&outcome, Format::Text, &Secrets::new());
         assert!(text.stdout.is_empty());
         assert!(text.stderr.contains("broken.yaml"), "got: {}", text.stderr);
 
-        let json = render(&outcome, Format::Json);
+        let json = render(&outcome, Format::Json, &Secrets::new());
         assert!(json.stderr.is_empty());
         let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
         assert_eq!(value["ok"], false);
@@ -623,7 +629,7 @@ mod tests {
                 .to_string(),
         };
 
-        let text = render(&outcome, Format::Text);
+        let text = render(&outcome, Format::Text, &Secrets::new());
         assert!(text.stdout.is_empty());
         assert!(
             text.stderr.contains("--tag \"missing\""),
@@ -631,7 +637,7 @@ mod tests {
             text.stderr
         );
 
-        let json = render(&outcome, Format::Json);
+        let json = render(&outcome, Format::Json, &Secrets::new());
         let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
         assert_eq!(value["ok"], false);
         assert_eq!(value["summary"]["cases"], 0);
@@ -667,7 +673,7 @@ mod tests {
             cases: Vec::new(),
         };
 
-        let rendered = render_lint(&report, Format::Text);
+        let rendered = render_lint(&report, Format::Text, &Secrets::new());
 
         assert!(rendered.stderr.is_empty());
         assert_eq!(
@@ -687,7 +693,7 @@ mod tests {
             cases: Vec::new(),
         };
 
-        let rendered = render_lint(&report, Format::Text);
+        let rendered = render_lint(&report, Format::Text, &Secrets::new());
 
         assert_eq!(
             rendered.stdout,
@@ -713,7 +719,7 @@ mod tests {
             }],
         };
 
-        let rendered = render_lint(&report, Format::Json);
+        let rendered = render_lint(&report, Format::Json, &Secrets::new());
         let value: Value = serde_json::from_str(&rendered.stdout).expect("stdout must be JSON");
 
         assert_eq!(
@@ -750,5 +756,79 @@ mod tests {
 
         let compact = render_schema(&schema, Format::Json);
         assert_eq!(compact.stdout, format!("{schema}\n"));
+    }
+
+    #[test]
+    fn a_secret_is_redacted_in_text_and_json_output() {
+        let RunOutcome::Completed(mut report) = failing_outcome() else {
+            panic!("the fixture must be a completed run");
+        };
+        report.cases[0].steps[0].result = Some(json!({"token": "s3cr3t-value"}));
+        report.cases[0].steps[0].assertions[0].actual = Some(json!("s3cr3t-value"));
+        report.cases[0].error = Some(Problem {
+            kind: ProblemKind::Assertion,
+            message: "s3cr3t-value did not match".to_string(),
+        });
+        let outcome = RunOutcome::Completed(report);
+        let mut secrets = Secrets::new();
+        secrets.record("s3cr3t-value");
+
+        let text = render(&outcome, Format::Text, &secrets);
+        assert!(!text.stdout.contains("s3cr3t-value"), "{}", text.stdout);
+        assert!(text.stdout.contains("***"), "{}", text.stdout);
+
+        let json = render(&outcome, Format::Json, &secrets);
+        assert!(!json.stdout.contains("s3cr3t-value"), "{}", json.stdout);
+        let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
+        assert_eq!(value["cases"][0]["steps"][0]["result"]["token"], "***");
+        assert_eq!(value["cases"][0]["error"]["message"], "*** did not match");
+    }
+
+    #[test]
+    fn a_rejected_run_redacts_its_error_messages() {
+        let outcome = RunOutcome::Rejected {
+            errors: vec![crate::core::case::CaseError {
+                file: PathBuf::from("bad.yaml"),
+                message: "`url` must start with a scheme, found `nope://s3cr3t-value`".to_string(),
+            }],
+        };
+        let mut secrets = Secrets::new();
+        secrets.record("s3cr3t-value");
+
+        let text = render(&outcome, Format::Text, &secrets);
+        assert!(!text.stderr.contains("s3cr3t-value"), "{}", text.stderr);
+        assert!(text.stderr.contains("***"), "{}", text.stderr);
+
+        let json = render(&outcome, Format::Json, &secrets);
+        assert!(!json.stdout.contains("s3cr3t-value"), "{}", json.stdout);
+        let value: Value = serde_json::from_str(&json.stdout).expect("stdout must be JSON");
+        assert!(
+            value["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("***")),
+            "got: {value}"
+        );
+    }
+
+    #[test]
+    fn a_lint_error_is_redacted_in_text_and_json() {
+        let report = LintReport {
+            files: 1,
+            errors: vec![CaseError {
+                file: PathBuf::from("bad.yaml"),
+                message: "step 1: environment variable `s3cr3t-value` is not set".to_string(),
+            }],
+            cases: Vec::new(),
+        };
+        let mut secrets = Secrets::new();
+        secrets.record("s3cr3t-value");
+
+        let text = render_lint(&report, Format::Text, &secrets);
+        assert!(!text.stdout.contains("s3cr3t-value"), "{}", text.stdout);
+        assert!(text.stdout.contains("***"), "{}", text.stdout);
+
+        let json = render_lint(&report, Format::Json, &secrets);
+        assert!(!json.stdout.contains("s3cr3t-value"), "{}", json.stdout);
+        assert!(json.stdout.contains("***"), "{}", json.stdout);
     }
 }

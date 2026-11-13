@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::core::paths;
+use crate::core::secrets::Secrets;
 use jsonpath_rust::JsonPath;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -695,21 +696,27 @@ pub fn kind_name(value: &Value) -> &'static str {
 /// Expands every `${name}` reference inside `value`.
 ///
 /// The substitution is textual and applies to strings only, so a variable may
-/// not change the type of a value. `vars` supplies the defined names.
-pub fn interpolate(value: &Value, vars: &BTreeMap<String, String>) -> Result<Value, String> {
+/// not change the type of a value. `vars` supplies the defined names; a
+/// `${env:NAME}` reference reads the process environment and records its value
+/// in `secrets`.
+pub fn interpolate(
+    value: &Value,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<Value, String> {
     match value {
-        Value::String(text) => Ok(Value::String(interpolate_str(text, vars)?)),
+        Value::String(text) => Ok(Value::String(interpolate_str(text, vars, secrets)?)),
         Value::Array(items) => {
             let mut expanded = Vec::with_capacity(items.len());
             for item in items {
-                expanded.push(interpolate(item, vars)?);
+                expanded.push(interpolate(item, vars, secrets)?);
             }
             Ok(Value::Array(expanded))
         }
         Value::Object(entries) => {
             let mut expanded = Map::new();
             for (key, item) in entries {
-                expanded.insert(key.clone(), interpolate(item, vars)?);
+                expanded.insert(key.clone(), interpolate(item, vars, secrets)?);
             }
             Ok(Value::Object(expanded))
         }
@@ -717,7 +724,51 @@ pub fn interpolate(value: &Value, vars: &BTreeMap<String, String>) -> Result<Val
     }
 }
 
-fn interpolate_str(input: &str, vars: &BTreeMap<String, String>) -> Result<String, String> {
+fn interpolate_str(
+    input: &str,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<String, String> {
+    substitute(input, Some(vars), secrets)
+}
+
+/// Expands the `${env:NAME}` references of `text` and leaves every other
+/// reference as written.
+///
+/// A variable's own value uses this: it may contain a `${name}` that only a
+/// step argument resolves, so that reference must survive.
+pub fn expand_env(text: &str, secrets: &mut Secrets) -> Result<String, String> {
+    substitute(text, None, secrets)
+}
+
+/// Expands the environment references in a case's own `vars:` values.
+///
+/// The error names the variable, because the value has no line of its own by
+/// the time it is expanded.
+pub fn expand_vars(
+    vars: &mut BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<(), String> {
+    for (name, value) in vars.iter_mut() {
+        let expanded = expand_env(value, secrets)
+            .map_err(|message| format!("variable `{name}`: {message}"))?;
+        *value = expanded;
+    }
+    Ok(())
+}
+
+/// The prefix that marks an environment variable reference.
+const ENV_PREFIX: &str = "env:";
+
+/// Replaces the `${...}` references of `input`.
+///
+/// `vars` supplies the defined names. With `None`, an unknown name stays as
+/// written instead of being an error.
+fn substitute(
+    input: &str,
+    vars: Option<&BTreeMap<String, String>>,
+    secrets: &mut Secrets,
+) -> Result<String, String> {
     let mut output = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(start) = rest.find("${") {
@@ -734,16 +785,60 @@ fn interpolate_str(input: &str, vars: &BTreeMap<String, String>) -> Result<Strin
                 "empty variable name in `{input}`; write `${{name}}`"
             ));
         }
-        let Some(value) = vars.get(name) else {
-            return Err(format!(
-                "undefined variable `${{{name}}}`; define it under `vars:` or save it in an earlier step"
-            ));
-        };
-        output.push_str(value);
+        match name.strip_prefix(ENV_PREFIX) {
+            Some(env_name) => output.push_str(&env_value(env_name, secrets)?),
+            None => match vars.and_then(|vars| vars.get(name)) {
+                Some(value) => output.push_str(value),
+                None if vars.is_some() => {
+                    return Err(format!(
+                        "undefined variable `${{{name}}}`; define it under `vars:` or save it in an earlier step"
+                    ));
+                }
+                None => {
+                    output.push_str("${");
+                    output.push_str(name);
+                    output.push('}');
+                }
+            },
+        }
         rest = &after[end + 1..];
     }
     output.push_str(rest);
     Ok(output)
+}
+
+/// Reads one environment variable and records its value as a secret.
+fn env_value(name: &str, secrets: &mut Secrets) -> Result<String, String> {
+    if name.is_empty() {
+        return Err("empty environment variable name; write `${env:NAME}`".to_string());
+    }
+    if !is_env_name(name) {
+        return Err(format!(
+            "`{name}` is not a valid environment variable name; use letters, digits and `_`, and do not start with a digit"
+        ));
+    }
+    match std::env::var(name) {
+        Ok(value) => {
+            secrets.record(&value);
+            Ok(value)
+        }
+        Err(std::env::VarError::NotPresent) => Err(format!(
+            "environment variable `{name}` is not set; set it before running"
+        )),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "environment variable `{name}` is not valid UTF-8; set it to text"
+        )),
+    }
+}
+
+/// Whether `name` is a usable environment variable name.
+fn is_env_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 /// Expands case files and directories into a sorted list of case files.
@@ -807,6 +902,68 @@ fn is_yaml(path: &Path) -> bool {
         .is_some_and(|extension| {
             extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
         })
+}
+
+/// Loads a `--vars-file`: a YAML mapping of names to string, number or boolean
+/// values.
+///
+/// The values are read the same way a case's `vars:` are, so a number or a
+/// boolean becomes its text form. A problem is reported with the file and, when
+/// the parser knows it, the line and column of the offending value; the caller
+/// decides the exit code.
+pub fn load_vars_file(path: &Path) -> Result<Vec<(String, String)>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "could not read `{}`: {error}; check that the file exists and is UTF-8",
+            paths::display(path)
+        )
+    })?;
+    let raw: Spanned<BTreeMap<String, Spanned<Value>>> =
+        serde_saphyr::from_str(&text).map_err(|error| {
+            format!(
+                "{}: {}",
+                paths::display(path),
+                strip_error_prefix(&error.to_string())
+            )
+        })?;
+
+    let mut values = Vec::with_capacity(raw.value.len());
+    for (name, value) in raw.value {
+        let location = value.referenced;
+        let text = match value.value {
+            Value::String(text) => text,
+            Value::Number(number) => number.to_string(),
+            Value::Bool(flag) => flag.to_string(),
+            Value::Null => {
+                return Err(vars_file_problem(
+                    path,
+                    &text,
+                    location,
+                    format!("variable `{name}` has no value; use a string, number or boolean"),
+                ));
+            }
+            Value::Array(_) | Value::Object(_) => {
+                return Err(vars_file_problem(
+                    path,
+                    &text,
+                    location,
+                    format!("variable `{name}` must be a string, number or boolean"),
+                ));
+            }
+        };
+        values.push((name, text));
+    }
+    Ok(values)
+}
+
+/// Renders a problem of a `--vars-file` the way a case error is rendered: the
+/// file name, then the location and source snippet when there is one.
+fn vars_file_problem(path: &Path, source: &str, location: Location, message: String) -> String {
+    format!(
+        "{}: {}",
+        paths::display(path),
+        Problem { location, message }.render(source)
+    )
 }
 
 /// Loads and parses one case file.
@@ -979,16 +1136,76 @@ steps:
     fn interpolates_strings_and_reports_undefined_variables() {
         let vars = BTreeMap::from([("name".to_string(), "alice".to_string())]);
         let value = serde_json::json!({"who": "hi ${name}", "nested": ["${name}"]});
+        let mut secrets = Secrets::new();
 
-        let expanded = interpolate(&value, &vars).expect("the value must expand");
+        let expanded = interpolate(&value, &vars, &mut secrets).expect("the value must expand");
         assert_eq!(
             expanded,
             serde_json::json!({"who": "hi alice", "nested": ["alice"]})
         );
 
-        let error = interpolate(&serde_json::json!("${missing}"), &vars)
+        let error = interpolate(&serde_json::json!("${missing}"), &vars, &mut secrets)
             .expect_err("the reference must be rejected");
         assert!(error.contains("missing"), "got: {error}");
+    }
+
+    #[test]
+    fn a_variable_value_keeps_a_reference_it_cannot_resolve() {
+        let mut vars = BTreeMap::from([("template".to_string(), "${later}".to_string())]);
+        let mut secrets = Secrets::new();
+
+        expand_vars(&mut vars, &mut secrets).expect("a plain reference is not an error");
+
+        assert_eq!(vars["template"], "${later}");
+    }
+
+    #[test]
+    fn an_environment_reference_is_expanded_and_recorded_as_a_secret() {
+        // The test process's own environment is never changed: `PATH` is used
+        // because every platform that runs these tests has it.
+        let path = std::env::var("PATH").expect("the test process must have a PATH");
+
+        let vars = BTreeMap::new();
+        let mut secrets = Secrets::new();
+        let expanded = interpolate(
+            &serde_json::json!({"a": "${env:PATH}"}),
+            &vars,
+            &mut secrets,
+        )
+        .expect("the reference must expand");
+
+        assert_eq!(expanded, serde_json::json!({"a": path}));
+        assert_eq!(secrets.redact(&path), "***");
+
+        let mut values = BTreeMap::from([("from_env".to_string(), "${env:PATH}".to_string())]);
+        expand_vars(&mut values, &mut secrets).expect("the value must expand");
+        assert_eq!(values["from_env"], path);
+    }
+
+    #[test]
+    fn a_missing_environment_variable_names_itself_and_what_to_do() {
+        let mut secrets = Secrets::new();
+        let vars = BTreeMap::new();
+
+        let error = interpolate(
+            &serde_json::json!("${env:TA_CORE_UNIT_MISSING_5C9D}"),
+            &vars,
+            &mut secrets,
+        )
+        .expect_err("the reference must be rejected");
+
+        assert!(error.contains("TA_CORE_UNIT_MISSING_5C9D"), "got: {error}");
+        assert!(error.contains("set it before running"), "got: {error}");
+
+        for (reference, fragment) in [
+            ("${env:}", "empty environment variable name"),
+            ("${env:9BAD}", "not a valid environment variable name"),
+            ("${env:BAD-NAME}", "not a valid environment variable name"),
+        ] {
+            let error = interpolate(&serde_json::json!(reference), &vars, &mut secrets)
+                .expect_err("the reference must be rejected");
+            assert!(error.contains(fragment), "{reference}: {error}");
+        }
     }
 
     /// A case whose first step is `cli.run` followed by `extra`.
@@ -1143,5 +1360,77 @@ steps:
         assert_eq!(names, vec!["a.yml", "b.yaml", "c.yaml"]);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_vars_file_reads_strings_numbers_and_booleans_as_text() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-file-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(
+            &path,
+            "name: alice\nport: 8080\nratio: 1.5\nenabled: true\ndisabled: false\n",
+        )
+        .expect("write the vars file");
+
+        let values = load_vars_file(&path).expect("the vars file must load");
+
+        assert_eq!(
+            values,
+            vec![
+                ("disabled".to_string(), "false".to_string()),
+                ("enabled".to_string(), "true".to_string()),
+                ("name".to_string(), "alice".to_string()),
+                ("port".to_string(), "8080".to_string()),
+                ("ratio".to_string(), "1.5".to_string()),
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vars_file_value_that_is_not_scalar_names_its_line() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-type-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "name: alice\ntoken:\n  - one\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the value must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(error.contains("token"), "got: {error}");
+        assert!(error.contains("line 3 column 3: "), "got: {error}");
+        assert!(
+            error.contains("must be a string, number or boolean"),
+            "got: {error}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_vars_file_that_is_not_a_mapping_is_reported_with_its_file() {
+        let dir = std::env::temp_dir().join(format!("ta-core-vars-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "- one\n- two\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the document must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(error.contains("line 1"), "got: {error}");
+
+        let missing = load_vars_file(&dir.join("nope.yaml")).expect_err("the file must be missing");
+        assert!(missing.contains("nope.yaml"), "got: {missing}");
+        assert!(
+            missing.contains("check that the file exists"),
+            "got: {missing}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -210,6 +210,10 @@ fn route(
         }
         (_, "/status/500") => json_response("500 Internal Server Error", r#"{"error":"boom"}"#),
         (_, "/text") => text_response("200 OK", "hello world"),
+        // A fixed body with one number, one boolean and one null, so a test can
+        // assert on how each JSON scalar is redacted without depending on a
+        // duration or a timestamp.
+        (_, "/scalars") => json_response("200 OK", r#"{"count":10,"flag":true,"nothing":null}"#),
         (_, "/echo") => {
             let echo = serde_json::json!({
                 "method": method,

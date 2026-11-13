@@ -102,7 +102,7 @@ A case talks to a program or service that is already running: `ta` never starts,
 | `http.request` | HTTP and HTTPS APIs | `status`, `headers`, `body` (parsed when JSON) |
 | `cli.run` | Command-line programs, run without a shell | `exit_code`, `stdout`, `stderr`, `json` |
 
-Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html). Variables: `vars`, `save` and `--var name=value`, referenced as `${name}`.
+Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html). Variables: `vars`, `save`, `--var name=value` and `--vars-file`, referenced as `${name}`; `${env:NAME}` reads the environment and its value is redacted from output and bundles.
 
 Classify a case with `project`, `suite`, `layer` and `tags`, then run only what you need with `--project`, `--suite`, `--layer`, `--tag` and `--skip-tag`.
 

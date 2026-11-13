@@ -114,7 +114,7 @@ $ echo $?
 | `http.request` | HTTP 与 HTTPS 接口 | `status`、`headers`、`body`（JSON 会被解析） |
 | `cli.run` | 命令行程序（不经 shell 启动） | `exit_code`、`stdout`、`stderr`、`json` |
 
-断言：在任意 [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html) 上使用 `equals`、`not_equals`、`contains`、`exists`。变量：`vars`、`save` 和 `--var name=value`，以 `${name}` 引用。
+断言：在任意 [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html) 上使用 `equals`、`not_equals`、`contains`、`exists`。变量：`vars`、`save`、`--var name=value` 和 `--vars-file`，以 `${name}` 引用；`${env:NAME}` 读取环境变量，其值在输出与失败包中替换为 `***`。
 
 用 `project`、`suite`、`layer` 和 `tags` 给用例分类，再用 `--project`、`--suite`、`--layer`、`--tag`、`--skip-tag` 选择要运行的部分。
 

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::core::output;
 use crate::core::paths;
 use crate::core::report::CaseReport;
+use crate::core::secrets::Secrets;
 
 /// Version of the bundle layout this build writes.
 pub const SCHEMA_VERSION: u64 = 1;
@@ -46,8 +47,15 @@ impl FailureBundles {
     /// Writes the bundle of one failed case and returns its final directory.
     ///
     /// `position` is the index of the case in the run, which keeps the
-    /// directories in run order and makes their names unique.
-    pub fn write(&mut self, position: usize, case: &CaseReport) -> Result<PathBuf, String> {
+    /// directories in run order and makes their names unique. `secrets` is
+    /// applied to every file this function writes; the copy of the case file is
+    /// left as written, because it holds `${env:NAME}` references and no values.
+    pub fn write(
+        &mut self,
+        position: usize,
+        case: &CaseReport,
+        secrets: &Secrets,
+    ) -> Result<PathBuf, String> {
         // Checked before anything is created, so a case file that vanished
         // leaves no empty directory behind.
         std::fs::metadata(&case.file).map_err(|error| {
@@ -73,7 +81,7 @@ impl FailureBundles {
             ));
         }
 
-        if let Err(detail) = stage(&staging, case, &final_dir) {
+        if let Err(detail) = stage(&staging, case, &final_dir, secrets) {
             let _ = std::fs::remove_dir_all(&staging);
             return Err(failure(case, detail));
         }
@@ -90,7 +98,7 @@ impl FailureBundles {
         }
         // The metadata comes last: it is what tells a reader that the rest of
         // the directory is complete.
-        if let Err(detail) = write_meta(&final_dir, case) {
+        if let Err(detail) = write_meta(&final_dir, case, secrets) {
             let _ = std::fs::remove_dir_all(&final_dir);
             return Err(failure(case, detail));
         }
@@ -107,7 +115,12 @@ impl FailureBundles {
     }
 }
 
-fn stage(staging: &Path, case: &CaseReport, final_dir: &Path) -> Result<(), String> {
+fn stage(
+    staging: &Path,
+    case: &CaseReport,
+    final_dir: &Path,
+    secrets: &Secrets,
+) -> Result<(), String> {
     let case_copy = staging.join("case.yaml");
     std::fs::copy(&case.file, &case_copy).map_err(|error| {
         format!(
@@ -118,16 +131,21 @@ fn stage(staging: &Path, case: &CaseReport, final_dir: &Path) -> Result<(), Stri
     })?;
 
     // The report is the same object `--output json` shows for this case, so a
-    // reader of the bundle and a reader of the output see one shape.
+    // reader of the bundle and a reader of the output see one shape. Both are
+    // redacted the same way, because a bundle is read after the terminal is
+    // gone.
     let mut reported = case.clone();
     reported.bundle = Some(final_dir.to_path_buf());
-    write_json(&staging.join("report.json"), &output::case_json(&reported))
+    write_json(
+        &staging.join("report.json"),
+        &secrets.redact_json(&output::case_json(&reported)),
+    )
 }
 
-fn write_meta(dir: &Path, case: &CaseReport) -> Result<(), String> {
+fn write_meta(dir: &Path, case: &CaseReport, secrets: &Secrets) -> Result<(), String> {
     write_json(
         &dir.join("meta.json"),
-        &json!({
+        &secrets.redact_json(&json!({
             "schema_version": SCHEMA_VERSION,
             "ta_version": env!("CARGO_PKG_VERSION"),
             "case_file": paths::display(&case.file),
@@ -138,7 +156,7 @@ fn write_meta(dir: &Path, case: &CaseReport) -> Result<(), String> {
             "tags": case.tags,
             "status": case.status.as_str(),
             "created_at": now_millis(),
-        }),
+        })),
     )
 }
 
@@ -291,7 +309,7 @@ mod tests {
         let mut bundles = FailureBundles::new(images.clone());
 
         let bundle = bundles
-            .write(0, &failing_case(source.clone()))
+            .write(0, &failing_case(source.clone()), &Secrets::new())
             .expect("the bundle must be written");
 
         assert!(bundle.starts_with(&images));
@@ -337,6 +355,38 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_is_redacted_in_the_report_and_the_metadata_but_not_in_the_case_copy() {
+        let dir = fixture("redacted");
+        let source = dir.join("case.yaml");
+        let case_text = "name: Wrong exit code\nsteps:\n  - cli.run:\n      args: [\"${env:TA_BUNDLE_TOKEN}\"]\n";
+        std::fs::write(&source, case_text).expect("the case file must be written");
+        let mut bundles = FailureBundles::new(dir.join("failures"));
+        let mut case = failing_case(source);
+        case.name = "Wrong exit code s3cr3t-value".to_string();
+        case.steps[0].result = Some(json!({"token": "s3cr3t-value"}));
+        let mut secrets = Secrets::new();
+        secrets.record("s3cr3t-value");
+
+        let bundle = bundles
+            .write(0, &case, &secrets)
+            .expect("the bundle must be written");
+
+        for name in ["report.json", "meta.json"] {
+            let text = std::fs::read_to_string(bundle.join(name))
+                .unwrap_or_else(|error| panic!("{name} must be readable: {error}"));
+            assert!(!text.contains("s3cr3t-value"), "{name} leaked: {text}");
+            assert!(text.contains("***"), "{name} must show the marker: {text}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(bundle.join("case.yaml")).expect("case.yaml must be readable"),
+            case_text,
+            "the case copy holds references, not values, and stays as written"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_run_directory_holds_only_finished_bundles() {
         let dir = fixture("no-staging");
         let source = dir.join("case.yaml");
@@ -344,10 +394,10 @@ mod tests {
         let mut bundles = FailureBundles::new(dir.join("failures"));
 
         let first = bundles
-            .write(0, &failing_case(source.clone()))
+            .write(0, &failing_case(source.clone()), &Secrets::new())
             .expect("the first bundle must be written");
         let second = bundles
-            .write(1, &failing_case(source))
+            .write(1, &failing_case(source), &Secrets::new())
             .expect("the second bundle must be written");
 
         let run = first.parent().expect("a bundle has a run directory");
@@ -382,7 +432,7 @@ mod tests {
         let mut bundles = FailureBundles::new(images.clone());
 
         let error = bundles
-            .write(0, &failing_case(dir.join("missing.yaml")))
+            .write(0, &failing_case(dir.join("missing.yaml")), &Secrets::new())
             .expect_err("the bundle must fail");
 
         assert!(error.contains("Wrong exit code"), "got: {error}");
@@ -404,7 +454,7 @@ mod tests {
         let mut bundles = FailureBundles::new(blocked);
 
         let error = bundles
-            .write(0, &failing_case(source))
+            .write(0, &failing_case(source), &Secrets::new())
             .expect_err("the bundle must fail");
 
         assert!(error.contains("could not create"), "got: {error}");
