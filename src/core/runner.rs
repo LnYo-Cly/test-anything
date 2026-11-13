@@ -182,7 +182,7 @@ fn run_one(
         // differ by position, so nothing else is shared.
         let mut writer = lock(writer);
         let secrets = lock(secrets);
-        match writer.write(index, &report, &**secrets) {
+        match writer.write(index, &report, &secrets) {
             Ok(directory) => report.bundle = Some(directory),
             Err(message) => lock(collected).bundle_errors.push((index, message)),
         }
@@ -370,7 +370,7 @@ fn execute_step(
     // runs, so one slow step cannot hold the others up.
     let args = {
         let mut secrets = lock(secrets);
-        case::interpolate(&step.args, vars, &mut **secrets)
+        case::interpolate(&step.args, vars, &mut secrets)
     }
     .map_err(|message| Problem {
         kind: ProblemKind::Execution,

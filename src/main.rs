@@ -158,15 +158,23 @@ fn main() -> ExitCode {
                 Ok(sources) => sources,
                 Err(message) => return usage_error(&message),
             };
-            let filters = Filters {
-                project: projects,
-                suite: suites,
-                layer: layers,
-                tag: tags,
-                skip_tag: skip_tags,
-            };
             run(
-                &paths, cli.output, &registry, &sources, &filters, bundle_dir, no_bundle, jobs,
+                cli.output,
+                &registry,
+                RunOptions {
+                    paths,
+                    sources,
+                    filters: Filters {
+                        project: projects,
+                        suite: suites,
+                        layer: layers,
+                        tag: tags,
+                        skip_tag: skip_tags,
+                    },
+                    bundle_dir,
+                    no_bundle,
+                    jobs,
+                },
             )
         }
         Command::Lint {
@@ -217,27 +225,19 @@ fn usage_error(message: &str) -> ExitCode {
     TaExitCode::Usage.into()
 }
 
-fn run(
-    paths: &[PathBuf],
-    format: OutputFormat,
-    registry: &Registry,
-    sources: &VarSources,
-    filters: &Filters,
+/// Everything one `ta run` asked for, as the command line stated it.
+struct RunOptions {
+    paths: Vec<PathBuf>,
+    sources: VarSources,
+    filters: Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
     jobs: usize,
-) -> ExitCode {
+}
+
+fn run(format: OutputFormat, registry: &Registry, options: RunOptions) -> ExitCode {
     let mut secrets = Secrets::new();
-    let outcome = execute(
-        paths,
-        registry,
-        sources,
-        filters,
-        bundle_dir,
-        no_bundle,
-        jobs,
-        &mut secrets,
-    );
+    let outcome = execute(registry, &options, &mut secrets);
     let rendered = output::render(&outcome, format.into(), &secrets);
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
@@ -247,26 +247,20 @@ fn run(
     outcome.exit_code().into()
 }
 
-fn execute(
-    paths: &[PathBuf],
-    registry: &Registry,
-    sources: &VarSources,
-    filters: &Filters,
-    bundle_dir: Option<PathBuf>,
-    no_bundle: bool,
-    jobs: usize,
-    secrets: &mut Secrets,
-) -> RunOutcome {
-    let LoadedCases { cases, errors, .. } = load_cases(paths, sources, secrets);
+fn execute(registry: &Registry, options: &RunOptions, secrets: &mut Secrets) -> RunOutcome {
+    let LoadedCases { cases, errors, .. } = load_cases(&options.paths, &options.sources, secrets);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
 
-    let mut bundles = if no_bundle {
+    let mut bundles = if options.no_bundle {
         None
     } else {
         Some(FailureBundles::new(
-            bundle_dir.unwrap_or_else(|| PathBuf::from(bundle::DEFAULT_DIRECTORY)),
+            options
+                .bundle_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(bundle::DEFAULT_DIRECTORY)),
         ))
     };
 
@@ -276,9 +270,9 @@ fn execute(
         registry,
         &bus,
         bundles.as_mut(),
-        filters,
+        &options.filters,
         secrets,
-        jobs,
+        options.jobs,
     )
 }
 
