@@ -141,7 +141,7 @@ repeated. It overrides a variable of the same name in the case's `vars:`. A
 ### Classification and filtering
 
 A case may describe where it belongs, so one repository can hold interface,
-command-line, interface and future database cases side by side:
+command-line, UI and future database cases side by side:
 
 ```yaml
 name: Login returns a token
