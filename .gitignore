@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 .ta/
+/harness/
+/.harness/
+/.worktrees/
