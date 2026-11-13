@@ -233,6 +233,23 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
         stderr(&missing)
     );
 
+    // Lint reads the same files, so a broken one is a usage error there too.
+    let lint = run_ta_in(
+        dir.path(),
+        &[
+            "lint",
+            path_str(&case),
+            "--vars-file",
+            path_str(&dir.path().join("nope.yaml")),
+        ],
+    );
+    assert_eq!(exit_code(&lint), Some(2), "{}", stderr(&lint));
+    assert!(
+        stderr(&lint).contains("nope.yaml"),
+        "got: {:?}",
+        stderr(&lint)
+    );
+
     let not_a_mapping = dir.write("list.yaml", "- one\n- two\n");
     let output = run_ta_in(
         dir.path(),
