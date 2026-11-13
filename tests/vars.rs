@@ -4,13 +4,20 @@
 //! that child process, never on the test process itself. The secrets are
 //! obvious fake values: nothing here is a real credential.
 
+// Every test needs at least one driver, so a build without drivers compiles an
+// empty test target instead of a file whose helpers are all unused.
+#![cfg(any(feature = "http", feature = "cli"))]
+// Each test is gated on the feature it needs, so a build with one driver uses a
+// subset of the helpers below.
+#![allow(dead_code)]
+
 mod support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use support::{TempDir, TestServer};
+use support::TempDir;
 
 /// The binary under test, as an absolute path.
 fn ta() -> &'static str {
@@ -541,7 +548,7 @@ fn a_secret_from_the_environment_never_reaches_output_or_a_bundle() {
     const SECRET: &str = "s3cr3t-TA-LEAK-4242";
     const NAME: &str = "TA_TEST_LEAK_SECRET";
 
-    let server = TestServer::start();
+    let server = support::TestServer::start();
     let dir = TempDir::new("leak-gate");
 
     // The inner case makes an inner `ta` print the secret on its standard
