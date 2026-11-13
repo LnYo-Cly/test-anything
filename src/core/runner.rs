@@ -1,6 +1,8 @@
 //! Executes loaded cases against a registry.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use jsonpath_rust::JsonPath;
@@ -30,14 +32,22 @@ use crate::core::secrets::Secrets;
 /// so the set is complete before the first failure bundle is written.
 ///
 /// When `bundles` is given, every selected case that did not pass gets a
-/// failure bundle before the next case starts.
+/// failure bundle before the run ends.
+///
+/// `jobs` is how many cases may run at the same time. One runs them one after
+/// another; a value above the number of selected cases is the same as that
+/// number, and a value below one is treated as one. Whatever the job count, a
+/// case keeps its position in [`RunReport::cases`], so the output does not
+/// depend on it. The events of one case stay in order, while events of
+/// different cases may interleave.
 pub fn run(
     cases: &[LoadedCase],
     registry: &Registry,
     bus: &EventBus,
-    mut bundles: Option<&mut FailureBundles>,
+    bundles: Option<&mut FailureBundles>,
     filters: &Filters,
     secrets: &mut Secrets,
+    jobs: usize,
 ) -> RunOutcome {
     let errors = preflight(cases, registry, secrets);
     if !errors.is_empty() {
@@ -60,42 +70,130 @@ pub fn run(
         cases: selected.len(),
     });
 
-    let mut reports = Vec::with_capacity(selected.len());
-    let mut bundle_errors = Vec::new();
-    for (index, loaded) in selected.into_iter().enumerate() {
-        bus.emit(Event::CaseStarted {
-            case: index,
-            name: loaded.case.name.clone(),
-        });
-        let mut report = run_case(index, loaded, registry, bus, secrets);
-        if report.status != CaseStatus::Passed
-            && let Some(writer) = bundles.as_deref_mut()
-        {
-            match writer.write(index, &report, secrets) {
-                Ok(directory) => report.bundle = Some(directory),
-                Err(message) => bundle_errors.push(message),
-            }
+    // One worker per job, but never more workers than cases: a worker takes the
+    // next case with a single atomic increment, so no case runs twice and none
+    // is skipped. The report of a case is stored at its own position, which is
+    // what keeps the output independent of which case finishes first.
+    let next = AtomicUsize::new(0);
+    let collected = Mutex::new(Collected::new(selected.len()));
+    let secrets = Mutex::new(secrets);
+    let bundles = bundles.map(Mutex::new);
+    let workers = jobs.max(1).min(selected.len());
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while let Some(index) = take_next(&next, selected.len()) {
+                    run_one(
+                        index,
+                        selected[index],
+                        registry,
+                        bus,
+                        bundles.as_ref(),
+                        &collected,
+                        &secrets,
+                    );
+                }
+            });
         }
-        bus.emit(Event::CaseFinished {
-            case: index,
-            name: report.name.clone(),
-            status: report.status,
-            duration: report.duration,
-        });
-        reports.push(report);
-    }
+    });
+
+    // A worker that panicked would have resumed its panic when the scope
+    // ended, so every slot is filled here.
+    let Collected {
+        reports,
+        mut bundle_errors,
+    } = collected
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Bundle errors keep the order of the cases they belong to, not the order
+    // in which the workers happened to fail writing them.
+    bundle_errors.sort_by_key(|(index, _)| *index);
 
     let report = RunReport {
-        cases: reports,
+        cases: reports.into_iter().flatten().collect(),
         filtered,
         duration: started.elapsed(),
-        bundle_errors,
+        bundle_errors: bundle_errors
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect(),
     };
     bus.emit(Event::RunFinished {
         summary: report.summary(),
         duration: report.duration,
     });
     RunOutcome::Completed(report)
+}
+
+/// What every worker produces and one thread reads after the scope.
+struct Collected {
+    /// One slot per selected case, filled at the case's discovery position.
+    reports: Vec<Option<CaseReport>>,
+    /// Bundles that could not be written, with the position of their case.
+    bundle_errors: Vec<(usize, String)>,
+}
+
+impl Collected {
+    fn new(cases: usize) -> Self {
+        Self {
+            reports: vec![None; cases],
+            bundle_errors: Vec::new(),
+        }
+    }
+}
+
+/// The index of the next case to run, or `None` once every case was taken.
+fn take_next(next: &AtomicUsize, total: usize) -> Option<usize> {
+    let index = next.fetch_add(1, Ordering::Relaxed);
+    (index < total).then_some(index)
+}
+
+/// Locks a mutex even when another thread panicked while holding it.
+///
+/// The state behind these locks is the report slots, the bundle writer and the
+/// secret values; a panic has no bearing on any of them, and a second panic
+/// would replace the run's result.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Runs one selected case and stores its report at its own position.
+fn run_one(
+    index: usize,
+    loaded: &LoadedCase,
+    registry: &Registry,
+    bus: &EventBus,
+    bundles: Option<&Mutex<&mut FailureBundles>>,
+    collected: &Mutex<Collected>,
+    secrets: &Mutex<&mut Secrets>,
+) {
+    bus.emit(Event::CaseStarted {
+        case: index,
+        name: loaded.case.name.clone(),
+    });
+    let mut report = run_case(index, loaded, registry, bus, secrets);
+    if report.status != CaseStatus::Passed
+        && let Some(writer) = bundles
+    {
+        // The bundle writer keeps one run directory and a staging counter, so
+        // the workers take turns. The case directories themselves already
+        // differ by position, so nothing else is shared.
+        let mut writer = lock(writer);
+        let secrets = lock(secrets);
+        match writer.write(index, &report, &secrets) {
+            Ok(directory) => report.bundle = Some(directory),
+            Err(message) => lock(collected).bundle_errors.push((index, message)),
+        }
+    }
+    bus.emit(Event::CaseFinished {
+        case: index,
+        name: report.name.clone(),
+        status: report.status,
+        duration: report.duration,
+    });
+    lock(collected).reports[index] = Some(report);
 }
 
 /// Checks everything that must hold before any case runs.
@@ -163,7 +261,7 @@ fn run_case(
     loaded: &LoadedCase,
     registry: &Registry,
     bus: &EventBus,
-    secrets: &mut Secrets,
+    secrets: &Mutex<&mut Secrets>,
 ) -> CaseReport {
     let started = Instant::now();
     let mut vars = loaded.case.vars.clone();
@@ -258,14 +356,23 @@ fn execute_step(
     step: &Step,
     registry: &Registry,
     vars: &mut BTreeMap<String, String>,
-    secrets: &mut Secrets,
+    secrets: &Mutex<&mut Secrets>,
 ) -> Result<(Value, Vec<AssertionReport>), Problem> {
     let definition = registry.get(&step.action).ok_or_else(|| Problem {
         kind: ProblemKind::InvalidInput,
         message: format!("`{}` is not a registered step", step.action),
     })?;
 
-    let args = case::interpolate(&step.args, vars, secrets).map_err(|message| Problem {
+    // Validation resolved every environment reference of every case before the
+    // first case ran, so this records nothing new; it still takes the lock,
+    // because interpolation is the only place that decides what is a secret.
+    // The lock is held while the arguments are expanded and never while a step
+    // runs, so one slow step cannot hold the others up.
+    let args = {
+        let mut secrets = lock(secrets);
+        case::interpolate(&step.args, vars, &mut secrets)
+    }
+    .map_err(|message| Problem {
         kind: ProblemKind::Execution,
         message,
     })?;
@@ -403,6 +510,29 @@ mod tests {
             })
             .expect("the failing test step must register");
         registry
+            .register(StepDefinition {
+                name: "test.wait",
+                description: "Waits `ms` milliseconds, then returns `value`.",
+                args_schema: json!({"type": "object"}),
+                validate: |_| Ok(()),
+                run: |args: &Value| {
+                    let millis = args.get("ms").and_then(Value::as_u64).unwrap_or(0);
+                    std::thread::sleep(Duration::from_millis(millis));
+                    Ok(args.get("value").cloned().unwrap_or(Value::Null))
+                },
+            })
+            .expect("the waiting test step must register");
+        registry
+    }
+
+    /// A step that takes time, so a case can be made to finish after a later one.
+    fn wait(millis: u64, value: Value) -> Step {
+        Step {
+            action: "test.wait".to_string(),
+            args: json!({ "ms": millis, "value": value }),
+            expect: Vec::new(),
+            save: Vec::new(),
+        }
     }
 
     fn echo(value: Value, expect: Vec<crate::core::case::Expectation>) -> Step {
@@ -431,6 +561,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Success);
@@ -452,6 +583,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
@@ -490,6 +622,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Environment);
@@ -521,6 +654,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
@@ -568,6 +702,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert!(outcome.is_ok());
@@ -611,6 +746,7 @@ mod tests {
             None,
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         assert!(outcome.is_ok(), "{outcome:?}");
@@ -645,6 +781,7 @@ mod tests {
             Some(&mut bundles),
             &Filters::default(),
             &mut Secrets::new(),
+            1,
         );
 
         let RunOutcome::Completed(report) = outcome else {
@@ -687,6 +824,7 @@ mod tests {
             None,
             &filters,
             &mut Secrets::new(),
+            1,
         );
 
         let RunOutcome::Completed(report) = outcome else {
@@ -717,6 +855,7 @@ mod tests {
             None,
             &filters,
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Usage);
@@ -757,6 +896,7 @@ mod tests {
             None,
             &filters,
             &mut Secrets::new(),
+            1,
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
@@ -769,5 +909,207 @@ mod tests {
             "got: {:?}",
             errors[0].file
         );
+    }
+
+    #[test]
+    fn cases_that_finish_in_another_order_are_reported_in_discovery_order() {
+        // The first case waits longest, so under four jobs the last one
+        // finishes first: a report collected as the cases finish would come out
+        // in the opposite order.
+        let mut cases = Vec::new();
+        for (name, millis) in [("a", 400_u64), ("b", 200), ("c", 100), ("d", 0)] {
+            cases.push(LoadedCase {
+                path: format!("{name}.yaml").into(),
+                case: test_case(name, vec![wait(millis, json!(name))]),
+            });
+        }
+
+        let finished = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let recorder = std::sync::Arc::clone(&finished);
+        let mut bus = EventBus::new();
+        bus.subscribe(move |event| {
+            if let Event::CaseFinished { case, .. } = event {
+                recorder
+                    .lock()
+                    .expect("the recording mutex is poisoned")
+                    .push(*case);
+            }
+        });
+
+        let outcome = run(
+            &cases,
+            &registry(),
+            &bus,
+            None,
+            &Filters::default(),
+            &mut Secrets::new(),
+            4,
+        );
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_ne!(
+            *finished.lock().expect("the recording mutex is poisoned"),
+            vec![0, 1, 2, 3],
+            "the cases must finish out of order, or this test proves nothing"
+        );
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        let names: Vec<&str> = report.cases.iter().map(|case| case.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["a", "b", "c", "d"],
+            "the report must follow the discovery order, not the completion order"
+        );
+    }
+
+    #[test]
+    fn a_job_count_outside_the_range_still_runs_every_case_once() {
+        let cases: Vec<LoadedCase> = ["a", "b", "c"]
+            .into_iter()
+            .map(|name| LoadedCase {
+                path: format!("{name}.yaml").into(),
+                case: test_case(name, vec![echo(json!(1), Vec::new())]),
+            })
+            .collect();
+
+        for jobs in [usize::MAX, 4, 1, 0] {
+            let outcome = run(
+                &cases,
+                &registry(),
+                &EventBus::new(),
+                None,
+                &Filters::default(),
+                &mut Secrets::new(),
+                jobs,
+            );
+            let RunOutcome::Completed(report) = outcome else {
+                panic!("the run must complete with {jobs} jobs");
+            };
+            assert_eq!(report.cases.len(), 3, "with {jobs} jobs");
+            for case in &report.cases {
+                assert_eq!(case.steps.len(), 1, "with {jobs} jobs: {case:?}");
+            }
+            for name in ["a", "b", "c"] {
+                let count = report.cases.iter().filter(|case| case.name == name).count();
+                assert_eq!(count, 1, "`{name}` must run exactly once with {jobs} jobs");
+            }
+        }
+    }
+
+    #[test]
+    fn one_case_keeps_its_events_in_order_when_cases_run_at_the_same_time() {
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let recorder = std::sync::Arc::clone(&seen);
+        let mut bus = EventBus::new();
+        bus.subscribe(move |event| {
+            if let Event::StepStarted { case, step, .. } | Event::StepFinished { case, step, .. } =
+                event
+            {
+                recorder
+                    .lock()
+                    .expect("the recording mutex is poisoned")
+                    .push((*case, *step));
+            }
+        });
+        let cases: Vec<LoadedCase> = (0..3)
+            .map(|index| LoadedCase {
+                path: format!("case-{index}.yaml").into(),
+                case: test_case(
+                    &format!("case {index}"),
+                    vec![wait(20, json!(1)), wait(10, json!(2))],
+                ),
+            })
+            .collect();
+
+        let outcome = run(
+            &cases,
+            &registry(),
+            &bus,
+            None,
+            &Filters::default(),
+            &mut Secrets::new(),
+            3,
+        );
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let seen = seen.lock().expect("the recording mutex is poisoned");
+        for case in 0..3 {
+            let steps: Vec<usize> = seen
+                .iter()
+                .filter(|(recorded, _)| *recorded == case)
+                .map(|(_, step)| *step)
+                .collect();
+            assert_eq!(
+                steps,
+                vec![0, 0, 1, 1],
+                "case {case} must see its own steps in order, whatever the other cases do"
+            );
+        }
+    }
+
+    #[test]
+    fn every_failing_case_of_a_parallel_run_gets_its_own_complete_bundle() {
+        let dir =
+            std::env::temp_dir().join(format!("ta-runner-parallel-bundles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
+
+        let mut cases = Vec::new();
+        for index in 0..3 {
+            let source = dir.join(format!("case-{index}.yaml"));
+            std::fs::write(&source, "name: case\nsteps: []\n")
+                .expect("the case file must be written");
+            let mut failing = echo(json!("wrong"), Vec::new());
+            failing.expect = vec![crate::core::case::Expectation {
+                path: "$".to_string(),
+                matcher: crate::core::case::Matcher::Equals(json!("right")),
+            }];
+            cases.push(LoadedCase {
+                path: source,
+                case: test_case(&format!("case {index}"), vec![failing]),
+            });
+        }
+
+        let mut bundles = FailureBundles::new(dir.join("failures"));
+        let outcome = run(
+            &cases,
+            &registry(),
+            &EventBus::new(),
+            Some(&mut bundles),
+            &Filters::default(),
+            &mut Secrets::new(),
+            3,
+        );
+
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        assert!(report.bundle_errors.is_empty(), "{report:?}");
+        let mut directories = std::collections::BTreeSet::new();
+        for case in &report.cases {
+            let bundle = case
+                .bundle
+                .as_ref()
+                .expect("every failing case must get a bundle");
+            assert!(bundle.join("meta.json").is_file(), "{bundle:?}");
+            assert!(bundle.join("report.json").is_file(), "{bundle:?}");
+            directories.insert(
+                bundle
+                    .file_name()
+                    .expect("a bundle directory has a name")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        assert_eq!(
+            directories,
+            ["0-case-0", "1-case-1", "2-case-2"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

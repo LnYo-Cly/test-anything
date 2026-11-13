@@ -81,6 +81,9 @@ enum Command {
         /// Do not write failure bundles.
         #[arg(long)]
         no_bundle: bool,
+        /// Runs up to N cases at the same time. Defaults to 1.
+        #[arg(long, value_name = "N", default_value_t = 1, value_parser = parse_jobs)]
+        jobs: usize,
     },
     /// Validate case files without running them.
     Lint {
@@ -112,6 +115,22 @@ fn parse_var(text: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), value.to_string()))
 }
 
+/// Reads the `--jobs` count.
+///
+/// Zero is refused instead of treated as "one job" or "no job at all", because
+/// either reading would silently run something other than what was asked for.
+fn parse_jobs(text: &str) -> Result<usize, String> {
+    match text.parse::<usize>() {
+        Ok(0) => Err(
+            "a run needs at least 1 job; write `--jobs 1` to run one case at a time".to_string(),
+        ),
+        Ok(jobs) => Ok(jobs),
+        Err(_) => Err(format!(
+            "`{text}` is not a number of jobs; write `--jobs N` with N at least 1"
+        )),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -133,20 +152,29 @@ fn main() -> ExitCode {
             skip_tags,
             bundle_dir,
             no_bundle,
+            jobs,
         } => {
             let sources = match VarSources::load(&vars_files, &vars) {
                 Ok(sources) => sources,
                 Err(message) => return usage_error(&message),
             };
-            let filters = Filters {
-                project: projects,
-                suite: suites,
-                layer: layers,
-                tag: tags,
-                skip_tag: skip_tags,
-            };
             run(
-                &paths, cli.output, &registry, &sources, &filters, bundle_dir, no_bundle,
+                cli.output,
+                &registry,
+                RunOptions {
+                    paths,
+                    sources,
+                    filters: Filters {
+                        project: projects,
+                        suite: suites,
+                        layer: layers,
+                        tag: tags,
+                        skip_tag: skip_tags,
+                    },
+                    bundle_dir,
+                    no_bundle,
+                    jobs,
+                },
             )
         }
         Command::Lint {
@@ -197,25 +225,19 @@ fn usage_error(message: &str) -> ExitCode {
     TaExitCode::Usage.into()
 }
 
-fn run(
-    paths: &[PathBuf],
-    format: OutputFormat,
-    registry: &Registry,
-    sources: &VarSources,
-    filters: &Filters,
+/// Everything one `ta run` asked for, as the command line stated it.
+struct RunOptions {
+    paths: Vec<PathBuf>,
+    sources: VarSources,
+    filters: Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
-) -> ExitCode {
+    jobs: usize,
+}
+
+fn run(format: OutputFormat, registry: &Registry, options: RunOptions) -> ExitCode {
     let mut secrets = Secrets::new();
-    let outcome = execute(
-        paths,
-        registry,
-        sources,
-        filters,
-        bundle_dir,
-        no_bundle,
-        &mut secrets,
-    );
+    let outcome = execute(registry, &options, &mut secrets);
     let rendered = output::render(&outcome, format.into(), &secrets);
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
@@ -225,30 +247,33 @@ fn run(
     outcome.exit_code().into()
 }
 
-fn execute(
-    paths: &[PathBuf],
-    registry: &Registry,
-    sources: &VarSources,
-    filters: &Filters,
-    bundle_dir: Option<PathBuf>,
-    no_bundle: bool,
-    secrets: &mut Secrets,
-) -> RunOutcome {
-    let LoadedCases { cases, errors, .. } = load_cases(paths, sources, secrets);
+fn execute(registry: &Registry, options: &RunOptions, secrets: &mut Secrets) -> RunOutcome {
+    let LoadedCases { cases, errors, .. } = load_cases(&options.paths, &options.sources, secrets);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
 
-    let mut bundles = if no_bundle {
+    let mut bundles = if options.no_bundle {
         None
     } else {
         Some(FailureBundles::new(
-            bundle_dir.unwrap_or_else(|| PathBuf::from(bundle::DEFAULT_DIRECTORY)),
+            options
+                .bundle_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(bundle::DEFAULT_DIRECTORY)),
         ))
     };
 
     let bus = EventBus::new();
-    runner::run(&cases, registry, &bus, bundles.as_mut(), filters, secrets)
+    runner::run(
+        &cases,
+        registry,
+        &bus,
+        bundles.as_mut(),
+        &options.filters,
+        secrets,
+        options.jobs,
+    )
 }
 
 /// Validates the cases without running them.

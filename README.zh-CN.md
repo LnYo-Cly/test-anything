@@ -118,6 +118,8 @@ $ echo $?
 
 用 `project`、`suite`、`layer` 和 `tags` 给用例分类，再用 `--project`、`--suite`、`--layer`、`--tag`、`--skip-tag` 选择要运行的部分。
 
+用例默认逐个执行；`--jobs N` 同时执行最多 N 个用例，输出顺序与退出码不变。
+
 ## 给编程 Agent 用
 
 `ta` 的设计目标是由 Agent 驱动，不需要人去看终端：

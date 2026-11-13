@@ -42,6 +42,9 @@ impl Request {
     }
 }
 
+/// How long the `/sleep` route waits before it answers.
+pub const SLEEP_ROUTE_DELAY: Duration = Duration::from_millis(1000);
+
 /// A minimal HTTP server bound to a loopback port, started by the test.
 pub struct TestServer {
     port: u16,
@@ -70,7 +73,16 @@ impl TestServer {
         let handle = thread::spawn(move || {
             while !server_stop.load(Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((stream, _)) => handle_connection(stream, &server_requests),
+                    // One thread per connection: a test that starts several
+                    // requests at once must be answered in parallel, the way a
+                    // real server answers, or a slowly answering route would
+                    // serialize the clients that the test runs concurrently.
+                    // The threads are not joined; they only hold the shared
+                    // request log, which outlives them.
+                    Ok((stream, _)) => {
+                        let requests = Arc::clone(&server_requests);
+                        thread::spawn(move || handle_connection(stream, &requests));
+                    }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
@@ -207,6 +219,12 @@ fn route(
         (_, "/slow") => {
             thread::sleep(Duration::from_millis(400));
             json_response("200 OK", r#"{"slow":true}"#)
+        }
+        // A wait long enough that four cases overlap for a measurable time when
+        // they run at once, and dominate the run when they do not.
+        (_, "/sleep") => {
+            thread::sleep(SLEEP_ROUTE_DELAY);
+            json_response("200 OK", r#"{"slept":true}"#)
         }
         (_, "/status/500") => json_response("500 Internal Server Error", r#"{"error":"boom"}"#),
         (_, "/text") => text_response("200 OK", "hello world"),

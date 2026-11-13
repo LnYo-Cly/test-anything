@@ -106,6 +106,8 @@ Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https
 
 Classify a case with `project`, `suite`, `layer` and `tags`, then run only what you need with `--project`, `--suite`, `--layer`, `--tag` and `--skip-tag`.
 
+Cases run one after another by default; `--jobs N` runs up to N of them at the same time and still reports them in the same order, with the same exit code.
+
 ## For coding agents
 
 `ta` is meant to be driven by an agent without a human reading the terminal:

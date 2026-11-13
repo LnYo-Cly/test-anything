@@ -9,6 +9,7 @@ The complete reference for `ta`: installation options, building from source, the
 - [Test](#test)
   - [Self-test suite](#self-test-suite)
 - [Usage](#usage)
+  - [Parallel runs](#parallel-runs)
   - [The service under test](#the-service-under-test)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
@@ -117,6 +118,7 @@ ta run cases/ --var token=abc --var user=alice
 ta run cases/ --vars-file envs/local.yaml --vars-file envs/ci.yaml
 ta run cases/ --layer api --tag smoke
 ta run cases/ --tag smoke --skip-tag slow
+ta run cases/ --jobs 4
 ta run cases/ --bundle-dir /tmp/ta-failures
 ta run cases/ --no-bundle
 ta --output json run cases/
@@ -173,6 +175,39 @@ with the same values a run would use.
 
 `--bundle-dir <directory>` changes where failure bundles are written (see
 [Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
+
+### Parallel runs
+
+`--jobs N` runs up to N cases at the same time, with N at least 1. The default
+is 1, which runs them one after another. Cases are independent by design —
+variables and `save` belong to one case, so no case sees another one's values —
+and a set that waits on a service benefits directly: cases that each wait a
+second finish in about a second when they run at the same time, instead of
+adding up.
+
+```sh
+ta run cases/ --jobs 4
+```
+
+The result does not depend on the job count. Cases are reported in the order
+they were discovered, in text output and in JSON, and the exit code follows the
+same rules; only the durations change. Every failing case still gets its own
+failure bundle, because the name of a bundle directory carries the case's
+position in the run. A value below 1 and a value that is not a whole number are
+usage errors (exit 2), and `--jobs` belongs to `ta run`; `ta lint` does not have
+it.
+
+Do not raise `--jobs` when the cases are not independent. Two cases that touch
+the same state — one test account, one row, one file under a fixed path — can
+pass alone and fail together, and the failure looks like a race in the service.
+Run that group with `--jobs 1` and a filter of its own, such as `--tag slow`,
+and give the rest of the cases a run of their own.
+
+A listener receives the events of one case in order — `CaseStarted`, the
+events of its steps, then `CaseFinished` — but the events of different cases
+interleave, so a listener must group them by the case index every event carries
+instead of assuming the order of the run. Nothing in `ta` subscribes to the bus
+today; this is the contract for the plugins that will.
 
 ### The service under test
 
