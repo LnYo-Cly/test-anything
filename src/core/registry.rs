@@ -1,8 +1,17 @@
-//! The step registry: step names, their argument schemas and their behavior.
+//! The registry: step and observer names, their argument schemas and their
+//! behavior.
+//!
+//! Steps and observers share the registry, the name rule and the shape of their
+//! declaration, so a plugin registers both the same way. They are kept in
+//! separate namespaces: a step named `sample.call` and an observer named
+//! `sample.call` do not collide, because a case names a step in `steps:` and an
+//! observer in `observe:`.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
+
+use crate::core::observer::ObserverDefinition;
 
 /// Why a step could not produce a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,10 +42,11 @@ pub struct StepDefinition {
     pub run: fn(&Value) -> Result<Value, StepError>,
 }
 
-/// The steps available to the runner, keyed by name.
+/// The steps and observers available to the runner, keyed by name.
 #[derive(Default)]
 pub struct Registry {
     steps: BTreeMap<&'static str, StepDefinition>,
+    observers: BTreeMap<&'static str, ObserverDefinition>,
 }
 
 impl Registry {
@@ -71,6 +81,33 @@ impl Registry {
     pub fn names(&self) -> Vec<&'static str> {
         self.steps.keys().copied().collect()
     }
+
+    /// Adds an observer.
+    ///
+    /// An observer gets the same name rule and the same uniqueness rule as a
+    /// step, but its own namespace: it is declared in `observe:`, never in
+    /// `steps:`.
+    pub fn register_observer(&mut self, definition: ObserverDefinition) -> Result<(), String> {
+        validate_name(definition.name)?;
+        if self.observers.contains_key(definition.name) {
+            return Err(format!(
+                "observer `{}` is already registered; every observer name must be unique",
+                definition.name
+            ));
+        }
+        self.observers.insert(definition.name, definition);
+        Ok(())
+    }
+
+    /// Looks an observer up by name.
+    pub fn observer(&self, name: &str) -> Option<&ObserverDefinition> {
+        self.observers.get(name)
+    }
+
+    /// Every registered observer name, in order.
+    pub fn observer_names(&self) -> Vec<&'static str> {
+        self.observers.keys().copied().collect()
+    }
 }
 
 /// Field names every step already gives a meaning to.
@@ -93,7 +130,10 @@ fn validate_name(name: &str) -> Result<(), String> {
             "step name is empty; use lowercase letters, digits, `.`, `_` and `-`".to_string(),
         );
     }
-    if let Some(character) = name.chars().find(|character| !is_allowed(*character)) {
+    if let Some(character) = name
+        .chars()
+        .find(|character| !is_allowed_name_character(*character))
+    {
         return Err(format!(
             "step name `{name}` contains `{character}`; use only lowercase letters, digits, `.`, `_` and `-`"
         ));
@@ -101,8 +141,11 @@ fn validate_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether one character may appear in a step name.
-fn is_allowed(character: char) -> bool {
+/// Whether one character may appear in a name the registry holds.
+///
+/// The rule is shared with the names a case gives its observations, so a key of
+/// `observed` reads the same way as a step or observer name.
+pub fn is_allowed_name_character(character: char) -> bool {
     character.is_ascii_lowercase()
         || character.is_ascii_digit()
         || matches!(character, '.' | '_' | '-')
@@ -111,6 +154,7 @@ fn is_allowed(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::observer::Observer;
 
     fn definition(name: &'static str) -> StepDefinition {
         StepDefinition {
@@ -119,6 +163,29 @@ mod tests {
             args_schema: serde_json::json!({"type": "object"}),
             validate: |_| Ok(()),
             run: |_| Ok(Value::Null),
+        }
+    }
+
+    /// An observer that collects nothing.
+    struct Silent;
+
+    impl Observer for Silent {
+        fn start(&mut self) -> Result<(), crate::core::observer::ObserverError> {
+            Ok(())
+        }
+
+        fn collect(&mut self) -> Result<Value, crate::core::observer::ObserverError> {
+            Ok(Value::Null)
+        }
+    }
+
+    fn observer(name: &'static str) -> crate::core::observer::ObserverDefinition {
+        crate::core::observer::ObserverDefinition {
+            name,
+            description: "Test observer.",
+            args_schema: serde_json::json!({"type": "object"}),
+            validate: |_| Ok(()),
+            create: |_| Ok(Box::new(Silent)),
         }
     }
 
@@ -199,6 +266,55 @@ mod tests {
                 "the message must say the name is reserved, got: {error}"
             );
             assert!(error.contains(name), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn observers_are_registered_and_looked_up_separately_from_steps() {
+        let mut registry = Registry::new();
+        // The two namespaces do not collide: one name can be a step and an
+        // observer, because a case uses each in its own place.
+        registry
+            .register(definition("test.same"))
+            .expect("the step must register");
+        registry
+            .register_observer(observer("test.same"))
+            .expect("the observer must register");
+
+        assert!(registry.get("test.same").is_some());
+        assert!(registry.observer("test.same").is_some());
+        assert!(registry.observer("test.other").is_none());
+        assert_eq!(registry.names(), vec!["test.same"]);
+        assert_eq!(registry.observer_names(), vec!["test.same"]);
+    }
+
+    #[test]
+    fn refuses_a_duplicate_observer_name() {
+        let mut registry = Registry::new();
+        registry
+            .register_observer(observer("test.watch"))
+            .expect("the first registration must succeed");
+
+        let error = registry
+            .register_observer(observer("test.watch"))
+            .expect_err("the duplicate must be refused");
+
+        assert!(error.contains("test.watch"), "got: {error}");
+        assert!(error.contains("observer"), "got: {error}");
+    }
+
+    #[test]
+    fn an_observer_name_follows_the_step_name_rule() {
+        for name in ["Demo.call", "demo/call", "demo call", ""] {
+            let mut registry = Registry::new();
+            let error = registry
+                .register_observer(observer(name))
+                .expect_err("the name must be refused");
+
+            assert!(
+                error.contains("lowercase letters"),
+                "the message must state the rule for `{name}`, got: {error}"
+            );
         }
     }
 }

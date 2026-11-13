@@ -6,13 +6,15 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use jsonpath_rust::JsonPath;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use serde_saphyr::Location;
 
 use crate::core::assert::{self, AssertionReport};
 use crate::core::bundle::FailureBundles;
-use crate::core::case::{self, CaseError, LoadedCase, SavedValue, Step};
+use crate::core::case::{self, CaseError, LoadedCase, Observation, SavedValue, Step};
 use crate::core::events::{Event, EventBus};
 use crate::core::filter::{self, Filters};
+use crate::core::observer::{Observer, ObserverError};
 use crate::core::registry::{Registry, StepError};
 use crate::core::report::{
     CaseReport, CaseStatus, Problem, ProblemKind, RunOutcome, RunReport, StepReport, StepStatus,
@@ -222,6 +224,14 @@ pub fn preflight(
 
     for loaded in cases {
         let mut vars = loaded.case.vars.clone();
+        // Observations are declared before the steps and resolve when the case
+        // starts, so they are checked first and against the case's own
+        // variables only.
+        for observation in &loaded.case.observe {
+            if let Err(error) = check_observation(loaded, observation, registry, &vars, secrets) {
+                errors.push(error);
+            }
+        }
         for (index, step) in loaded.case.steps.iter().enumerate() {
             let position = index + 1;
             match case::interpolate(&step.args, &vars, secrets) {
@@ -256,6 +266,83 @@ pub fn preflight(
     errors
 }
 
+/// The names an unknown observer message can offer.
+fn observer_hint(registry: &Registry) -> String {
+    let names = registry.observer_names();
+    if names.is_empty() {
+        "no observers are registered; build with a feature that provides one".to_string()
+    } else {
+        format!(
+            "registered observers: {}",
+            names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+/// Checks one declared observation: its arguments expand, its observer exists
+/// and its arguments satisfy that observer.
+///
+/// Every message points at the node in the case file it belongs to, because the
+/// parser kept the location and the user has to edit it there.
+fn check_observation(
+    loaded: &LoadedCase,
+    observation: &Observation,
+    registry: &Registry,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<(), CaseError> {
+    let name = &observation.name;
+    let args = case::interpolate(&observation.args, vars, secrets).map_err(|message| {
+        positioned(
+            loaded,
+            observation.args_location,
+            format!("observation `{name}`: {message}"),
+        )
+    })?;
+    let Some(definition) = registry.observer(&observation.kind) else {
+        return Err(positioned(
+            loaded,
+            observation.location,
+            format!(
+                "observation `{name}`: `{}` is not a registered observer; {}",
+                observation.kind,
+                observer_hint(registry)
+            ),
+        ));
+    };
+    (definition.validate)(&args).map_err(|message| {
+        positioned(
+            loaded,
+            observation.args_location,
+            format!("observation `{name}`: `{}` {message}", observation.kind),
+        )
+    })
+}
+
+/// Renders a message at the place in the case file it belongs to.
+///
+/// The snippet needs the file text, which the parser no longer holds, so the
+/// file is read again. Loading has just read it; if it is gone now, the line and
+/// column are still reported without the snippet.
+fn positioned(loaded: &LoadedCase, location: Location, message: String) -> CaseError {
+    let message = match std::fs::read_to_string(&loaded.path) {
+        Ok(text) => case::render_problem(&text, location, message),
+        Err(_) => format!(
+            "line {} column {}: {message}",
+            location.line(),
+            location.column()
+        ),
+    };
+    CaseError {
+        file: loaded.path.clone(),
+        message,
+    }
+}
+
 fn run_case(
     index: usize,
     loaded: &LoadedCase,
@@ -266,7 +353,13 @@ fn run_case(
     let started = Instant::now();
     let mut vars = loaded.case.vars.clone();
     let mut steps = Vec::with_capacity(loaded.case.steps.len());
-    let mut stopped: Option<Problem> = None;
+    // One observation per declared name belongs to this case and to no other,
+    // so two cases that run at the same time never share what they collect.
+    let (mut observations, mut stopped) =
+        match create_observations(&loaded.case.observe, registry, &vars, secrets) {
+            Ok(observations) => (observations, None),
+            Err(problem) => (Vec::new(), Some(problem)),
+        };
 
     for (position, step) in loaded.case.steps.iter().enumerate() {
         if stopped.is_some() {
@@ -296,7 +389,7 @@ fn run_case(
             error: None,
         };
 
-        match execute_step(step, registry, &mut vars, secrets) {
+        match execute_step(step, registry, &mut vars, secrets, &mut observations) {
             Ok((result, assertions)) => {
                 let failed = assertions.iter().filter(|item| !item.passed).count();
                 if failed == 0 {
@@ -352,11 +445,78 @@ fn run_case(
     }
 }
 
+/// One declared observation, ready to start and collect around every step.
+struct ObservationSlot {
+    /// Name the case gave the observation.
+    name: String,
+    /// Registered observer name, reported in an error.
+    kind: &'static str,
+    /// The observation of this case.
+    observer: Box<dyn Observer>,
+}
+
+/// Creates the observation of one case from its `observe:` entries.
+///
+/// The arguments are resolved here, once, so every step observes the same
+/// target; a value saved by a step is not available to an observation.
+fn create_observations(
+    declared: &[Observation],
+    registry: &Registry,
+    vars: &BTreeMap<String, String>,
+    secrets: &Mutex<&mut Secrets>,
+) -> Result<Vec<ObservationSlot>, Problem> {
+    let mut slots = Vec::with_capacity(declared.len());
+    for observation in declared {
+        let args = {
+            let mut secrets = lock(secrets);
+            case::interpolate(&observation.args, vars, &mut secrets)
+        }
+        .map_err(|message| Problem {
+            kind: ProblemKind::InvalidInput,
+            message: format!("observation `{}`: {message}", observation.name),
+        })?;
+        let Some(definition) = registry.observer(&observation.kind) else {
+            return Err(Problem {
+                kind: ProblemKind::InvalidInput,
+                message: format!(
+                    "observation `{}`: `{}` is not a registered observer",
+                    observation.name, observation.kind
+                ),
+            });
+        };
+        let observer = (definition.create)(&args).map_err(|error| Problem {
+            kind: problem_kind_of(&error),
+            message: format!(
+                "observation `{}` (`{}`): {}",
+                observation.name,
+                definition.name,
+                error.message()
+            ),
+        })?;
+        slots.push(ObservationSlot {
+            name: observation.name.clone(),
+            kind: definition.name,
+            observer,
+        });
+    }
+    Ok(slots)
+}
+
+/// The category of a problem an observer reported.
+fn problem_kind_of(error: &ObserverError) -> ProblemKind {
+    match error {
+        ObserverError::InvalidArguments(_) => ProblemKind::InvalidInput,
+        ObserverError::Environment(_) => ProblemKind::Environment,
+    }
+}
+
+/// A step's arguments and the observations collected around it.
 fn execute_step(
     step: &Step,
     registry: &Registry,
     vars: &mut BTreeMap<String, String>,
     secrets: &Mutex<&mut Secrets>,
+    observations: &mut [ObservationSlot],
 ) -> Result<(Value, Vec<AssertionReport>), Problem> {
     let definition = registry.get(&step.action).ok_or_else(|| Problem {
         kind: ProblemKind::InvalidInput,
@@ -376,7 +536,31 @@ fn execute_step(
         kind: ProblemKind::Execution,
         message,
     })?;
+
+    // Every observation starts before the step, so what it reports is the
+    // change this one step made.
+    for slot in observations.iter_mut() {
+        slot.observer
+            .start()
+            .map_err(|error| observer_problem(slot, &error))?;
+    }
+
     let result = (definition.run)(&args).map_err(problem_from_step_error)?;
+
+    // Collection happens before the assertions are evaluated: an `expect` entry
+    // that names `$.observed.<name>` must see the values of this step.
+    let observed: Map<String, Value> = {
+        let mut observed = Map::new();
+        for slot in observations.iter_mut() {
+            let value = slot
+                .observer
+                .collect()
+                .map_err(|error| observer_problem(slot, &error))?;
+            observed.insert(slot.name.clone(), value);
+        }
+        observed
+    };
+    let result = merge_observations(result, observed);
 
     let assertions: Vec<AssertionReport> = step
         .expect
@@ -391,6 +575,46 @@ fn execute_step(
     }
 
     Ok((result, assertions))
+}
+
+/// Adds the collected values to a step result as `observed.<name>`.
+///
+/// Every built-in step returns a JSON object, which is what the contract
+/// promises. A step of a plugin that returns another value keeps it under
+/// `value`, so the observations are not lost and the original result is still
+/// reachable at `$.value`.
+fn merge_observations(result: Value, observed: Map<String, Value>) -> Value {
+    if observed.is_empty() {
+        return result;
+    }
+    match result {
+        Value::Object(mut entries) => {
+            entries.insert("observed".to_string(), Value::Object(observed));
+            Value::Object(entries)
+        }
+        other => {
+            let mut wrapped = Map::new();
+            wrapped.insert("value".to_string(), other);
+            wrapped.insert("observed".to_string(), Value::Object(observed));
+            Value::Object(wrapped)
+        }
+    }
+}
+
+/// The problem an observer that failed around a step produces.
+///
+/// The message names the observation and the observer kind, because the user
+/// chooses the first and may not know which one the second is.
+fn observer_problem(slot: &ObservationSlot, error: &ObserverError) -> Problem {
+    Problem {
+        kind: problem_kind_of(error),
+        message: format!(
+            "observer `{}` (`{}`): {}",
+            slot.name,
+            slot.kind,
+            error.message()
+        ),
+    }
 }
 
 fn save_values(
@@ -464,8 +688,37 @@ fn problem_from_step_error(error: StepError) -> Problem {
 mod tests {
     use super::*;
     use crate::core::case::Case;
+    use crate::core::observer::Observer;
     use crate::core::registry::StepDefinition;
     use serde_json::json;
+
+    /// An observer that reports the arguments it was created with.
+    struct Echo(Value);
+
+    impl Observer for Echo {
+        fn start(&mut self) -> Result<(), ObserverError> {
+            Ok(())
+        }
+
+        fn collect(&mut self) -> Result<Value, ObserverError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    /// An observer that cannot collect, as a file that cannot be read would.
+    struct Broken;
+
+    impl Observer for Broken {
+        fn start(&mut self) -> Result<(), ObserverError> {
+            Ok(())
+        }
+
+        fn collect(&mut self) -> Result<Value, ObserverError> {
+            Err(ObserverError::Environment(
+                "could not read `app.log`".to_string(),
+            ))
+        }
+    }
 
     fn test_case(name: &str, steps: Vec<Step>) -> Case {
         Case {
@@ -475,6 +728,7 @@ mod tests {
             suite: None,
             layer: None,
             tags: Vec::new(),
+            observe: Vec::new(),
             steps,
         }
     }
@@ -523,6 +777,49 @@ mod tests {
             })
             .expect("the waiting test step must register");
         registry
+            .register(StepDefinition {
+                name: "test.scalar",
+                description: "Returns a number.",
+                args_schema: json!({"type": "object"}),
+                validate: |_| Ok(()),
+                run: |_| Ok(json!(5)),
+            })
+            .expect("the scalar test step must register");
+        registry
+            .register_observer(crate::core::observer::ObserverDefinition {
+                name: "test.watch",
+                description: "Reports its arguments.",
+                args_schema: json!({"type": "object"}),
+                validate: |args: &Value| {
+                    if args.get("note").is_some() {
+                        Ok(())
+                    } else {
+                        Err("invalid arguments: `note` is required".to_string())
+                    }
+                },
+                create: |args| Ok(Box::new(Echo(args.clone()))),
+            })
+            .expect("the echoing observer must register");
+        registry
+            .register_observer(crate::core::observer::ObserverDefinition {
+                name: "test.broken",
+                description: "Cannot collect.",
+                args_schema: json!({"type": "object"}),
+                validate: |_| Ok(()),
+                create: |_| Ok(Box::new(Broken)),
+            })
+            .expect("the broken observer must register");
+        registry
+    }
+
+    fn observation(name: &str, kind: &str, args: Value) -> crate::core::case::Observation {
+        crate::core::case::Observation {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            args,
+            location: Location::UNKNOWN,
+            args_location: Location::UNKNOWN,
+        }
     }
 
     /// A step that takes time, so a case can be made to finish after a later one.
@@ -1111,5 +1408,161 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn run_one_case(case: Case) -> RunOutcome {
+        let registry = registry();
+        run(
+            &[LoadedCase {
+                path: "case.yaml".into(),
+                case,
+            }],
+            &registry,
+            &EventBus::new(),
+            None,
+            &Filters::default(),
+            &mut Secrets::new(),
+            1,
+        )
+    }
+
+    #[test]
+    fn observations_are_merged_into_the_result_before_the_assertions() {
+        let mut case = test_case(
+            "observed",
+            vec![echo(
+                json!(1),
+                vec![crate::core::case::Expectation {
+                    path: "$.observed.app_log.note".to_string(),
+                    matcher: crate::core::case::Matcher::Equals(json!("hello")),
+                }],
+            )],
+        );
+        case.observe = vec![observation(
+            "app_log",
+            "test.watch",
+            json!({"note": "hello"}),
+        )];
+
+        let outcome = run_one_case(case);
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        let result = report.cases[0].steps[0]
+            .result
+            .as_ref()
+            .expect("a passed step keeps its result");
+        assert_eq!(result["value"], json!(1), "the step result must be kept");
+        assert_eq!(
+            result["observed"]["app_log"]["note"],
+            json!("hello"),
+            "the observation must be merged under `observed`"
+        );
+    }
+
+    #[test]
+    fn a_result_that_is_not_an_object_keeps_the_observation_under_value() {
+        let mut case = test_case(
+            "scalar",
+            vec![Step {
+                action: "test.scalar".to_string(),
+                args: json!({}),
+                expect: vec![
+                    crate::core::case::Expectation {
+                        path: "$.value".to_string(),
+                        matcher: crate::core::case::Matcher::Equals(json!(5)),
+                    },
+                    crate::core::case::Expectation {
+                        path: "$.observed.app_log.note".to_string(),
+                        matcher: crate::core::case::Matcher::Equals(json!("hello")),
+                    },
+                ],
+                save: Vec::new(),
+            }],
+        );
+        case.observe = vec![observation(
+            "app_log",
+            "test.watch",
+            json!({"note": "hello"}),
+        )];
+
+        let outcome = run_one_case(case);
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+    }
+
+    #[test]
+    fn an_observer_that_cannot_collect_makes_the_step_an_environment_error() {
+        let mut case = test_case("broken", vec![echo(json!(1), Vec::new())]);
+        case.observe = vec![observation("app_log", "test.broken", json!({}))];
+
+        let outcome = run_one_case(case);
+
+        assert_eq!(
+            outcome.exit_code(),
+            crate::exit::ExitCode::Environment,
+            "{outcome:?}"
+        );
+        let RunOutcome::Completed(report) = outcome else {
+            panic!("the run must complete");
+        };
+        let problem = report.cases[0].steps[0]
+            .error
+            .as_ref()
+            .expect("the step must carry the observer's problem");
+        assert_eq!(problem.kind, ProblemKind::Environment);
+        assert!(problem.message.contains("app_log"), "{problem:?}");
+        assert!(problem.message.contains("test.broken"), "{problem:?}");
+        assert!(problem.message.contains("app.log"), "{problem:?}");
+    }
+
+    #[test]
+    fn an_unknown_observation_rejects_the_run_before_any_step_runs() {
+        let mut case = test_case("unknown", vec![echo(json!(1), Vec::new())]);
+        case.observe = vec![observation("app_log", "test.missing", json!({}))];
+
+        let outcome = run_one_case(case);
+
+        assert_eq!(
+            outcome.exit_code(),
+            crate::exit::ExitCode::InvalidCase,
+            "{outcome:?}"
+        );
+        let RunOutcome::Rejected { errors } = outcome else {
+            panic!("the run must be rejected");
+        };
+        assert!(
+            errors[0].message.contains("test.missing"),
+            "{:?}",
+            errors[0]
+        );
+        assert!(
+            errors[0]
+                .message
+                .contains("registered observers: `test.broken`, `test.watch`"),
+            "the message must list the registered observers, got: {:?}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn observation_arguments_that_do_not_validate_reject_the_run() {
+        let mut case = test_case("arguments", vec![echo(json!(1), Vec::new())]);
+        case.observe = vec![observation("app_log", "test.watch", json!({}))];
+
+        let outcome = run_one_case(case);
+
+        assert_eq!(
+            outcome.exit_code(),
+            crate::exit::ExitCode::InvalidCase,
+            "{outcome:?}"
+        );
+        let RunOutcome::Rejected { errors } = outcome else {
+            panic!("the run must be rejected");
+        };
+        assert!(errors[0].message.contains("app_log"), "{:?}", errors[0]);
+        assert!(errors[0].message.contains("note"), "{:?}", errors[0]);
     }
 }

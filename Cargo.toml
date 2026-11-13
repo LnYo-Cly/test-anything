@@ -10,11 +10,13 @@ name = "ta"
 path = "src/main.rs"
 
 [features]
-default = ["http", "cli"]
+default = ["http", "cli", "log"]
 # The `http.request` step and the HTTP client it needs.
 http = ["dep:schemars", "dep:ureq"]
 # The `cli.run` step and the child-process timeout it needs.
 cli = ["dep:schemars", "dep:wait-timeout"]
+# The `log.file` observer and the argument schema it needs.
+log = ["dep:schemars"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

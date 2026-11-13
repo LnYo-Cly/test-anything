@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::core::paths;
 use crate::core::secrets::Secrets;
 use jsonpath_rust::JsonPath;
-use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::de::{Error as DeError, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 use serde_saphyr::{CroppedRegion, Error, Location, Options, Spanned};
@@ -27,8 +27,30 @@ pub struct Case {
     pub layer: Option<String>,
     /// Tags of the case, in declaration order. Empty when it has none.
     pub tags: Vec<String>,
+    /// Observations collected around every step, in declaration order.
+    pub observe: Vec<Observation>,
     /// Steps, executed in order until one fails.
     pub steps: Vec<Step>,
+}
+
+/// One observation declared by a case.
+///
+/// The name belongs to the case; the kind names a registered observer. The
+/// collected value of the kind appears under the name in every step result, as
+/// `observed.<name>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Observation {
+    /// Name the case gives this observation.
+    pub name: String,
+    /// Registered observer name, for example `log.file`.
+    pub kind: String,
+    /// Arguments passed to the observer.
+    pub args: Value,
+    /// Where the observer is named. A registry-dependent error, such as an
+    /// unknown observer, points here.
+    pub location: Location,
+    /// Where the observer's arguments start. An argument error points here.
+    pub args_location: Location,
 }
 
 /// One step of a case.
@@ -124,7 +146,202 @@ struct RawCase {
     layer: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    observe: Option<Spanned<RawObservations>>,
     steps: Vec<Spanned<RawStep>>,
+}
+
+/// The `observe:` mapping as written, keeping the location of every entry.
+#[derive(Debug)]
+struct RawObservations {
+    entries: Vec<(String, Spanned<RawObservation>)>,
+}
+
+impl<'de> Deserialize<'de> for RawObservations {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ObserveVisitor;
+
+        impl<'de> Visitor<'de> for ObserveVisitor {
+            type Value = RawObservations;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a mapping of observation names to one observer")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<RawObservations, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(name) = map.next_key::<String>()? {
+                    entries.push((name, map.next_value::<Spanned<RawObservation>>()?));
+                }
+                Ok(RawObservations { entries })
+            }
+
+            // `deserialize_any` reaches these for a block that is not a
+            // mapping, so the message can say what `observe` expects instead of
+            // the parser's generic `expected mapping start`.
+            fn visit_seq<A>(self, _: A) -> Result<RawObservations, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                Err(A::Error::custom(observe_expects("a list")))
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("a string")))
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("a number")))
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("a number")))
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("a number")))
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("a boolean")))
+            }
+
+            fn visit_unit<E>(self) -> Result<RawObservations, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(observe_expects("null")))
+            }
+        }
+
+        deserializer.deserialize_any(ObserveVisitor)
+    }
+}
+
+/// The message an `observe:` block that is not a mapping reports.
+fn observe_expects(found: &str) -> String {
+    format!("`observe` must be a mapping of observation names to one observer, found {found}")
+}
+
+/// One `observe:` entry before the single-observer rule is applied.
+#[derive(Debug)]
+struct RawObservation {
+    /// The observer name and its arguments, with the location of the latter.
+    fields: Vec<(String, Spanned<Value>)>,
+}
+
+impl<'de> Deserialize<'de> for RawObservation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ObservationVisitor;
+
+        impl<'de> Visitor<'de> for ObservationVisitor {
+            type Value = RawObservation;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a mapping naming one observer and its arguments")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<RawObservation, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut fields = Vec::new();
+                while let Some(kind) = map.next_key::<String>()? {
+                    fields.push((kind, map.next_value::<Spanned<Value>>()?));
+                }
+                Ok(RawObservation { fields })
+            }
+
+            fn visit_seq<A>(self, _: A) -> Result<RawObservation, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                Err(A::Error::custom(
+                    "an observation must name one observer and its arguments, found a list",
+                ))
+            }
+
+            fn visit_str<E>(self, _: &str) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found a string",
+                ))
+            }
+
+            fn visit_i64<E>(self, _: i64) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found a number",
+                ))
+            }
+
+            fn visit_u64<E>(self, _: u64) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found a number",
+                ))
+            }
+
+            fn visit_f64<E>(self, _: f64) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found a number",
+                ))
+            }
+
+            fn visit_bool<E>(self, _: bool) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found a boolean",
+                ))
+            }
+
+            fn visit_unit<E>(self) -> Result<RawObservation, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom(
+                    "an observation must name one observer and its arguments, found null",
+                ))
+            }
+        }
+
+        deserializer.deserialize_any(ObservationVisitor)
+    }
 }
 
 /// One step as written, with the location of every part a structural error can
@@ -334,6 +551,15 @@ pub fn parse(text: &str) -> Result<Case, String> {
     build_case(raw).map_err(|problem| problem.render(text))
 }
 
+/// Renders a message at the place in a case file it belongs to.
+///
+/// A check that needs the registry runs after parsing, but its message belongs
+/// to a node the parser saw, so it uses the same location and snippet layout as
+/// a structural error.
+pub fn render_problem(text: &str, location: Location, message: String) -> String {
+    Problem { location, message }.render(text)
+}
+
 /// Turns the raw document into a case, adding the location to every problem.
 fn build_case(raw: Spanned<RawCase>) -> Result<Case, Problem> {
     // Problems without a more precise node point at the document itself.
@@ -345,6 +571,7 @@ fn build_case(raw: Spanned<RawCase>) -> Result<Case, Problem> {
         suite,
         layer,
         tags,
+        observe,
         steps: raw_steps,
     } = raw.value;
 
@@ -391,8 +618,104 @@ fn build_case(raw: Spanned<RawCase>) -> Result<Case, Problem> {
         suite: classification(suite, "suite", document)?,
         layer: classification(layer, "layer", document)?,
         tags: classification_tags(tags, document)?,
+        observe: parse_observations(observe)?,
         steps,
     })
+}
+
+/// Turns the raw `observe:` mapping into observations.
+///
+/// Everything this function checks is visible in the file alone: the name, one
+/// observer per name and a mapping of arguments. Whether the observer exists
+/// and whether the arguments satisfy it needs the registry, so the runner
+/// checks that and points at the locations kept here.
+fn parse_observations(raw: Option<Spanned<RawObservations>>) -> Result<Vec<Observation>, Problem> {
+    let Some(node) = raw else {
+        return Ok(Vec::new());
+    };
+
+    let mut observations = Vec::with_capacity(node.value.entries.len());
+    for (name, value) in node.value.entries {
+        let location = value.referenced;
+        validate_observation_name(&name).map_err(|message| Problem {
+            location,
+            message: format!("observation `{name}`: {message}"),
+        })?;
+
+        let fields = value.value.fields;
+        let (kind, args) = match fields.len() {
+            1 => {
+                let mut entries = fields.into_iter();
+                let Some(entry) = entries.next() else {
+                    return Err(Problem {
+                        location,
+                        message: format!(
+                            "observation `{name}` must name exactly one observer such as `log.file`, found none"
+                        ),
+                    });
+                };
+                entry
+            }
+            0 => {
+                return Err(Problem {
+                    location,
+                    message: format!(
+                        "observation `{name}` must name exactly one observer such as `log.file`, found none"
+                    ),
+                });
+            }
+            count => {
+                let kinds: Vec<String> = fields.iter().map(|(kind, _)| kind.clone()).collect();
+                return Err(Problem {
+                    location,
+                    message: format!(
+                        "observation `{name}` must name exactly one observer, found {count}: {}",
+                        kinds.join(", ")
+                    ),
+                });
+            }
+        };
+        if !args.value.is_object() {
+            return Err(Problem {
+                location: args.referenced,
+                message: format!(
+                    "observation `{name}`: `{kind}` takes a mapping of arguments, found {}",
+                    kind_name(&args.value)
+                ),
+            });
+        }
+
+        observations.push(Observation {
+            name,
+            kind,
+            args: args.value,
+            location,
+            args_location: args.referenced,
+        });
+    }
+    Ok(observations)
+}
+
+/// Checks the name a case gives an observation.
+///
+/// The name becomes a key of every step result, which an assertion addresses as
+/// `$.observed.<name>`, so it follows the same character rule as a registered
+/// name and needs no bracket escaping.
+fn validate_observation_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(
+            "the name is empty; use lowercase letters, digits, `.`, `_` and `-`".to_string(),
+        );
+    }
+    if let Some(character) = name
+        .chars()
+        .find(|character| !crate::core::registry::is_allowed_name_character(*character))
+    {
+        return Err(format!(
+            "the name contains `{character}`; use only lowercase letters, digits, `.`, `_` and `-`"
+        ));
+    }
+    Ok(())
 }
 
 /// Checks one optional classification value.
@@ -1092,6 +1415,114 @@ steps:
 
         assert!(error.contains("naem"), "got: {error}");
         assert!(error.contains("line 2"), "got: {error}");
+        assert!(
+            error.contains("observe"),
+            "the accepted fields must include `observe`, got: {error}"
+        );
+    }
+
+    #[test]
+    fn parses_the_observe_block_in_declaration_order() {
+        let case = parse(
+            "name: Example\nobserve:\n  app_log:\n    log.file:\n      path: app.log\n  second:\n    log.file:\n      path: b.log\nsteps:\n  - sample.call:\n      target: local\n",
+        )
+        .expect("the case must parse");
+
+        assert_eq!(case.observe.len(), 2);
+        assert_eq!(case.observe[0].name, "app_log");
+        assert_eq!(case.observe[0].kind, "log.file");
+        assert_eq!(case.observe[0].args, serde_json::json!({"path": "app.log"}));
+        assert_eq!(case.observe[1].name, "second");
+        assert_eq!(case.observe[1].args, serde_json::json!({"path": "b.log"}));
+    }
+
+    #[test]
+    fn an_observation_keeps_the_locations_of_its_observer_and_arguments() {
+        let case = parse(
+            "name: Example\nobserve:\n  app_log:\n    log.file:\n      path: app.log\nsteps:\n  - sample.call:\n      target: local\n",
+        )
+        .expect("the case must parse");
+
+        assert_eq!(case.observe[0].location.line(), 4);
+        assert_eq!(case.observe[0].location.column(), 5);
+        assert_eq!(case.observe[0].args_location.line(), 5);
+        assert_eq!(case.observe[0].args_location.column(), 7);
+    }
+
+    #[test]
+    fn a_case_without_observations_has_an_empty_list() {
+        let case = parse("name: Example\nsteps:\n  - sample.call:\n      target: local\n")
+            .expect("the case must parse");
+        assert!(case.observe.is_empty());
+
+        let empty =
+            parse("name: Example\nobserve: {}\nsteps:\n  - sample.call:\n      target: local\n")
+                .expect("an empty observe block must parse");
+        assert!(empty.observe.is_empty());
+    }
+
+    #[test]
+    fn an_observation_names_exactly_one_observer() {
+        for (body, fragment) in [
+            ("  app_log: {}\n", "found none"),
+            (
+                "  app_log:\n    log.file: {}\n    other.watch: {}\n",
+                "found 2",
+            ),
+        ] {
+            let text = format!(
+                "name: Broken\nobserve:\n{body}steps:\n  - sample.call:\n      target: local\n"
+            );
+            let error = parse(&text).expect_err("the case must be rejected");
+
+            assert!(error.contains(fragment), "got: {error}");
+            assert!(error.contains("app_log"), "got: {error}");
+            assert!(error.starts_with("line "), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn an_observation_needs_a_mapping_of_arguments() {
+        let text = "name: Broken\nobserve:\n  app_log:\n    log.file:\nsteps:\n  - sample.call:\n      target: local\n";
+        let error = parse(text).expect_err("the case must be rejected");
+
+        assert!(error.contains("log.file"), "got: {error}");
+        assert!(error.contains("mapping of arguments"), "got: {error}");
+        assert!(error.contains("found null"), "got: {error}");
+        assert!(error.starts_with("line 4"), "got: {error}");
+    }
+
+    #[test]
+    fn an_observation_name_must_be_a_key_of_observed() {
+        for (name, fragment) in [("App_log", "`A`"), ("app log", "` `"), ("", "empty")] {
+            let text = format!(
+                "name: Broken\nobserve:\n  \"{name}\":\n    log.file:\n      path: app.log\nsteps:\n  - sample.call:\n      target: local\n"
+            );
+            let error = parse(&text).expect_err("the case must be rejected");
+
+            assert!(error.contains(fragment), "`{name}`: got: {error}");
+            assert!(error.contains("lowercase letters"), "got: {error}");
+        }
+    }
+
+    #[test]
+    fn an_observe_block_that_is_not_a_mapping_is_refused_with_its_location() {
+        for (value, kind) in [
+            ("  - app_log\n", "found a list"),
+            ("  3\n", "found a number"),
+        ] {
+            let text = format!(
+                "name: Broken\nobserve:\n{value}steps:\n  - sample.call:\n      target: local\n"
+            );
+            let error = parse(&text).expect_err("the case must be rejected");
+
+            assert!(
+                error.contains("mapping of observation names"),
+                "got: {error}"
+            );
+            assert!(error.contains(kind), "got: {error}");
+            assert!(error.contains("line 3"), "got: {error}");
+        }
     }
 
     #[test]

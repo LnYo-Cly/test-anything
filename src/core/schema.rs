@@ -1,14 +1,16 @@
 //! JSON Schema for the case file format.
 //!
 //! The schema mirrors the rules `case::parse` enforces: the top level has
-//! exactly `name`, the four classification fields, `vars` and `steps`; a step
-//! carries exactly one registered step name plus optional `expect` and `save`;
-//! and every assertion uses one of the four comparisons. Step argument schemas
-//! come from the registry, so a step's declared schema and the exported schema
-//! cannot drift apart.
+//! exactly `name`, the four classification fields, `vars`, `observe` and
+//! `steps`; a step carries exactly one registered step name plus optional
+//! `expect` and `save`; an observation carries exactly one registered observer
+//! plus its arguments; and every assertion uses one of the four comparisons.
+//! Step and observer argument schemas come from the registry, so a declared
+//! schema and the exported schema cannot drift apart.
 
 use serde_json::{Map, Value, json};
 
+use crate::core::observer::ObserverDefinition;
 use crate::core::registry::{Registry, StepDefinition};
 
 /// Builds a JSON Schema for one case file.
@@ -39,10 +41,27 @@ pub fn case_schema(registry: &Registry) -> Value {
         json!({ "oneOf": branches })
     };
 
+    let mut observer_branches = Vec::new();
+    for name in registry.observer_names() {
+        let Some(definition) = registry.observer(name) else {
+            continue;
+        };
+        definitions.insert(name.to_string(), observer_arguments_schema(definition));
+        observer_branches.push(observation_branch(name));
+    }
+
+    // A build without observers accepts an empty `observe:` block but no
+    // observation, for the same reason as the step list above.
+    let observation_items = if observer_branches.is_empty() {
+        Value::Bool(false)
+    } else {
+        json!({ "oneOf": observer_branches })
+    };
+
     json!({
         "$schema": crate::CASE_SCHEMA_DIALECT,
         "title": "ta case file",
-        "description": "A declarative test case: a name, optional classification, optional variables and an ordered list of steps.",
+        "description": "A declarative test case: a name, optional classification, optional variables, optional observations and an ordered list of steps.",
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "steps"],
@@ -84,6 +103,15 @@ pub fn case_schema(registry: &Registry) -> Value {
                     "type": ["string", "number", "boolean"]
                 }
             },
+            "observe": {
+                "type": "object",
+                "description": "Observations collected around every step. Each entry names one observer and its arguments; its collected value appears in the step result as `observed.<name>`.",
+                "propertyNames": {
+                    "pattern": "^[a-z0-9._-]+$",
+                    "description": "The name becomes a key of `observed`, so it uses lowercase letters, digits, `.`, `_` and `-`."
+                },
+                "additionalProperties": observation_items
+            },
             "steps": {
                 "type": "array",
                 "description": "Steps executed in order until one fails.",
@@ -114,20 +142,49 @@ fn step_branch(name: &str) -> Value {
     })
 }
 
-/// The step's own argument schema, with its description and no dialect header.
-fn step_arguments_schema(definition: &StepDefinition) -> Value {
-    let Value::Object(mut schema) = definition.args_schema.clone() else {
+/// One allowed shape of an observation: exactly one observer and its arguments.
+fn observation_branch(name: &str) -> Value {
+    let mut properties = Map::new();
+    properties.insert(
+        name.to_string(),
+        json!({ "$ref": format!("#/$defs/{name}") }),
+    );
+
+    json!({
+        "type": "object",
+        "description": format!("An observation that uses `{name}`."),
+        "additionalProperties": false,
+        "required": [name],
+        "properties": Value::Object(properties)
+    })
+}
+
+/// An argument schema from the registry, with its description and no dialect
+/// header, so it can live in `$defs`.
+fn arguments_schema(description: &str, args_schema: &Value) -> Value {
+    let Value::Object(mut schema) = args_schema.clone() else {
         // A boolean argument schema is already complete and cannot carry a
-        // description. No built-in driver uses one.
-        return definition.args_schema.clone();
+        // description. No built-in step or observer uses one.
+        return args_schema.clone();
     };
     schema.remove("$schema");
     schema.remove("title");
     schema.insert(
         "description".to_string(),
-        Value::String(definition.description.to_string()),
+        Value::String(description.to_string()),
     );
     Value::Object(schema)
+}
+
+/// The step's own argument schema, with its description and no dialect header.
+fn step_arguments_schema(definition: &StepDefinition) -> Value {
+    arguments_schema(definition.description, &definition.args_schema)
+}
+
+/// The observer's own argument schema, with its description and no dialect
+/// header.
+fn observer_arguments_schema(definition: &ObserverDefinition) -> Value {
+    arguments_schema(definition.description, &definition.args_schema)
 }
 
 /// The list of assertions allowed in `expect`.
@@ -187,6 +244,7 @@ fn save_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::observer::{Observer, ObserverError};
     use crate::core::registry::StepDefinition;
     use serde_json::json;
 
@@ -207,6 +265,40 @@ mod tests {
                 run: |_| Ok(Value::Null),
             })
             .expect("the test step must register");
+        registry
+    }
+
+    /// An observer that collects nothing, for schema tests.
+    struct Silent;
+
+    impl Observer for Silent {
+        fn start(&mut self) -> Result<(), ObserverError> {
+            Ok(())
+        }
+
+        fn collect(&mut self) -> Result<Value, ObserverError> {
+            Ok(Value::Null)
+        }
+    }
+
+    fn observer_registry() -> Registry {
+        let mut registry = registry();
+        registry
+            .register_observer(ObserverDefinition {
+                name: "test.watch",
+                description: "Reports nothing.",
+                args_schema: json!({
+                    "$schema": "dialect-placeholder",
+                    "title": "Arguments",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["target"],
+                    "properties": {"target": {"type": "string", "minLength": 1}}
+                }),
+                validate: |_| Ok(()),
+                create: |_| Ok(Box::new(Silent)),
+            })
+            .expect("the test observer must register");
         registry
     }
 
@@ -255,8 +347,39 @@ mod tests {
 
         assert_eq!(schema["properties"]["steps"]["items"], Value::Bool(false));
         assert_eq!(
+            schema["properties"]["observe"]["additionalProperties"],
+            Value::Bool(false),
+            "without observers no observation can be declared"
+        );
+        assert_eq!(
             schema["$defs"],
             json!({"expect": expectation_schema(), "save": save_schema()})
+        );
+    }
+
+    #[test]
+    fn every_observer_is_a_definition_with_its_description_and_a_reference() {
+        let schema = case_schema(&observer_registry());
+        let definition = &schema["$defs"]["test.watch"];
+
+        assert_eq!(definition["type"], "object");
+        assert_eq!(definition["description"], "Reports nothing.");
+        assert_eq!(definition["title"], Value::Null);
+        assert_eq!(definition["$schema"], Value::Null);
+        assert_eq!(definition["properties"]["target"]["minLength"], 1);
+
+        let observe = &schema["properties"]["observe"];
+        assert_eq!(observe["type"], "object");
+        assert_eq!(observe["propertyNames"]["pattern"], "^[a-z0-9._-]+$");
+        let branches = observe["additionalProperties"]["oneOf"]
+            .as_array()
+            .expect("registered observers must produce a oneOf");
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0]["additionalProperties"], false);
+        assert_eq!(branches[0]["required"], json!(["test.watch"]));
+        assert_eq!(
+            branches[0]["properties"]["test.watch"]["$ref"],
+            "#/$defs/test.watch"
         );
     }
 

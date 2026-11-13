@@ -135,7 +135,9 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let mut registry = Registry::new();
-    if let Err(message) = drivers::register(&mut registry) {
+    if let Err(message) =
+        drivers::register(&mut registry).and_then(|()| drivers::register_observers(&mut registry))
+    {
         let _ = write_stderr(&format!("ta: internal error: {message}\n"));
         return TaExitCode::Environment.into();
     }

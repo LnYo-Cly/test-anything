@@ -719,6 +719,128 @@ steps:
     );
 }
 
+/// The same gate for the observation channel: a secret that a step wrote into
+/// the log file an observer reads must be redacted like any other step result.
+///
+/// An observation reaches the terminal and the failure bundle through the step
+/// result, so this checks that the new way of producing a value did not open a
+/// path around redaction.
+#[test]
+#[cfg(all(feature = "http", feature = "log"))]
+fn a_secret_written_into_an_observed_log_is_redacted_everywhere() {
+    const SECRET: &str = "s3cr3t-TA-LOG-5150";
+    const NAME: &str = "TA_TEST_LOG_SECRET";
+
+    let server = support::TestServer::start();
+    let dir = TempDir::new("leak-observed-log");
+    let log = dir.path().join("app.log");
+    let case = dir.write(
+        "case.yaml",
+        &format!(
+            r#"
+name: Logged secret
+observe:
+  app_log:
+    log.file:
+      path: '{log}'
+steps:
+  - http.request:
+      method: POST
+      url: {base}/write-log
+      json:
+        path: '{log}'
+        text: "token=${{env:{name}}}\n"
+    expect:
+      - path: $.observed.app_log.lines
+        equals: ["token=nope"]
+"#,
+            log = log.display(),
+            base = server.url(""),
+            name = NAME
+        ),
+    );
+    let environment = [(NAME, SECRET)];
+
+    let text_bundles = dir.path().join("bundles-text");
+    let text = run_ta_with_env(
+        dir.path(),
+        &[
+            "run",
+            path_str(&case),
+            "--bundle-dir",
+            path_str(&text_bundles),
+        ],
+        &environment,
+    );
+    assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
+
+    // The second run starts from a log the first one wrote; removing it keeps
+    // both runs observing the same increment.
+    let _ = fs::remove_file(&log);
+    let json_bundles = dir.path().join("bundles-json");
+    let json = run_ta_with_env(
+        dir.path(),
+        &[
+            "--output",
+            "json",
+            "run",
+            path_str(&case),
+            "--bundle-dir",
+            path_str(&json_bundles),
+        ],
+        &environment,
+    );
+    assert_eq!(exit_code(&json), Some(1), "stderr: {:?}", stderr(&json));
+
+    for (channel, content) in [
+        ("text stdout", stdout(&text)),
+        ("text stderr", stderr(&text)),
+        ("json stdout", stdout(&json)),
+        ("json stderr", stderr(&json)),
+    ] {
+        assert!(
+            !content.contains(SECRET),
+            "{channel} leaked the secret: {content}"
+        );
+    }
+    for (channel, content) in [
+        ("text stdout", stdout(&text)),
+        ("json stdout", stdout(&json)),
+    ] {
+        assert!(
+            content.contains("***"),
+            "{channel} must show the redaction marker: {content}"
+        );
+    }
+
+    let parsed: Value =
+        serde_json::from_str(&stdout(&json)).expect("stdout must be one JSON object");
+    assert_no_scalar_contains(&parsed, SECRET, "json stdout");
+    assert_eq!(
+        parsed["cases"][0]["steps"][0]["assertions"][0]["actual"][0], "token=***",
+        "the observed line must be redacted in the assertion: {parsed}"
+    );
+
+    for dir in [&text_bundles, &json_bundles] {
+        for (path, bytes) in files_under(dir) {
+            let text = String::from_utf8_lossy(&bytes);
+            assert!(
+                !text.contains(SECRET),
+                "{} leaked the secret: {text}",
+                path.display()
+            );
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let value: Value = serde_json::from_slice(&bytes)
+                    .unwrap_or_else(|error| panic!("{} must be JSON: {error}", path.display()));
+                assert_no_scalar_contains(&value, SECRET, &path.display().to_string());
+            }
+        }
+    }
+}
+
 /// The same gate for an error message: a preflight failure names the argument
 /// that was rejected, and that argument contains the secret.
 #[test]
