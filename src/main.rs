@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -65,7 +66,7 @@ fn main() -> ExitCode {
 
     let mut registry = Registry::new();
     if let Err(message) = drivers::register(&mut registry) {
-        eprintln!("ta: internal error: {message}");
+        let _ = write_stderr(&format!("ta: internal error: {message}\n"));
         return TaExitCode::Environment.into();
     }
 
@@ -79,8 +80,11 @@ fn main() -> ExitCode {
 fn run(paths: &[PathBuf], format: OutputFormat, registry: &Registry) -> ExitCode {
     let outcome = execute(paths, registry);
     let rendered = output::render(&outcome, format.into());
-    print!("{}", rendered.stdout);
-    eprint!("{}", rendered.stderr);
+    // A write error must not replace the run's exit code. The common case is a
+    // reader that exits early, such as `head` or `jq`; there is usually nowhere
+    // left to report the failure either.
+    let _ = write_stdout(&rendered.stdout);
+    let _ = write_stderr(&rendered.stderr);
     outcome.exit_code().into()
 }
 
@@ -121,11 +125,11 @@ fn execute(paths: &[PathBuf], registry: &Registry) -> RunOutcome {
 fn not_implemented(name: &str, format: OutputFormat) -> ExitCode {
     match format {
         OutputFormat::Text => {
-            eprintln!("ta {name}: not implemented yet");
+            let _ = write_stderr(&format!("ta {name}: not implemented yet\n"));
         }
         OutputFormat::Json => {
-            println!(
-                "{}",
+            let _ = write_stdout(&format!(
+                "{}\n",
                 json!({
                     "ok": false,
                     "error": {
@@ -133,8 +137,27 @@ fn not_implemented(name: &str, format: OutputFormat) -> ExitCode {
                         "message": format!("ta {name} is not implemented yet"),
                     },
                 })
-            );
+            ));
         }
     }
     TaExitCode::NotImplemented.into()
+}
+
+/// Writes `text` to standard output, returning a write error instead of
+/// panicking.
+///
+/// `print!` panics when the reader of the pipe exits early, which replaces the
+/// run's exit code with 101 and hides the test result.
+fn write_stdout(text: &str) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(text.as_bytes())?;
+    stdout.flush()
+}
+
+/// Writes `text` to standard error, returning a write error instead of
+/// panicking for the same reason as [`write_stdout`].
+fn write_stderr(text: &str) -> io::Result<()> {
+    let mut stderr = io::stderr().lock();
+    stderr.write_all(text.as_bytes())?;
+    stderr.flush()
 }

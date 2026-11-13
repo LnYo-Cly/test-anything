@@ -25,3 +25,10 @@ ureq = { version = "3.5", default-features = false, features = ["json", "rustls"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[lints.clippy]
+# The print macros panic when standard output or standard error cannot be
+# written, for example when the reader closes the pipe early. Write through
+# fallible helpers so the run keeps its own exit code.
+print_stdout = "deny"
+print_stderr = "deny"
