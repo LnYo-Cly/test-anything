@@ -60,6 +60,9 @@ struct CliRunArgs {
     #[serde(default)]
     stdin: Option<String>,
     /// Timeout for the whole run, in milliseconds. Defaults to 30000.
+    // The schema must enforce the same bound as `check`, so that a value the
+    // schema accepts is not rejected later for this argument.
+    #[schemars(extend("minimum" = 1))]
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }

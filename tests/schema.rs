@@ -241,6 +241,72 @@ fn an_unknown_comparison_is_rejected() {
 
 #[cfg(feature = "cli")]
 #[test]
+fn a_cli_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
+    let definition = step_definition("cli.run");
+    assert_eq!(
+        definition.args_schema["properties"]["timeout_ms"]["minimum"], 1,
+        "the step schema must declare the bound validate enforces: {}",
+        definition.args_schema
+    );
+    assert_eq!(
+        schema()["$defs"]["cli.run"]["properties"]["timeout_ms"]["minimum"],
+        1,
+        "`ta schema` must carry the same bound"
+    );
+
+    let zero = json!({"command": "ta", "timeout_ms": 0});
+    assert!(
+        (definition.validate)(&zero).is_err(),
+        "validate must reject `timeout_ms: 0`"
+    );
+    assert!(
+        !jsonschema::is_valid(&definition.args_schema, &zero),
+        "the schema must reject `timeout_ms: 0`: {}",
+        definition.args_schema
+    );
+}
+
+#[cfg(feature = "http")]
+#[test]
+fn an_http_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
+    let definition = step_definition("http.request");
+    assert_eq!(
+        definition.args_schema["properties"]["timeout_ms"]["minimum"], 1,
+        "the step schema must declare the bound validate enforces: {}",
+        definition.args_schema
+    );
+    assert_eq!(
+        schema()["$defs"]["http.request"]["properties"]["timeout_ms"]["minimum"],
+        1,
+        "`ta schema` must carry the same bound"
+    );
+
+    let zero = json!({"url": "http://127.0.0.1:1/health", "timeout_ms": 0});
+    assert!(
+        (definition.validate)(&zero).is_err(),
+        "validate must reject `timeout_ms: 0`"
+    );
+    assert!(
+        !jsonschema::is_valid(&definition.args_schema, &zero),
+        "the schema must reject `timeout_ms: 0`: {}",
+        definition.args_schema
+    );
+}
+
+/// A registered step definition, for tests that compare the schema with
+/// `validate`.
+#[cfg(any(feature = "cli", feature = "http"))]
+fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition {
+    let mut registry = test_anything::core::registry::Registry::new();
+    test_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
+    registry
+        .get(name)
+        .unwrap_or_else(|| panic!("`{name}` must be registered"))
+        .clone()
+}
+
+#[cfg(feature = "cli")]
+#[test]
 fn an_unknown_step_argument_is_rejected() {
     let validator = validator(schema());
     let instance = json!({

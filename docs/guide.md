@@ -293,11 +293,12 @@ Or point the server's `yaml.schemas` setting at the file once:
 }
 ```
 
-The schema describes the shape of a case, not every check: undefined variables,
-the syntax of JSON paths, and value constraints that a step checks itself (for
-example a timeout of at least 1) still need `ta lint`. A build with
-`--no-default-features` still prints a valid schema, but no step is registered,
-so the step item accepts nothing.
+The schema describes the shape of a case, not every check: undefined variables
+and the syntax of JSON paths still need `ta lint`. A bound that a step declares
+for an argument, such as a timeout of at least 1, is in the schema as well: it
+appears as `minimum` in the step's `$defs` entry, and `ta lint` enforces the
+same bound. A build with `--no-default-features` still prints a valid schema,
+but no step is registered, so the step item accepts nothing.
 
 ## Case files
 
