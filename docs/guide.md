@@ -354,10 +354,16 @@ Before anything is written, every occurrence of every secret is replaced with
 - text output on standard output and standard error, including the actual value
   of a failed assertion and the message of a step error;
 - `--output json`, as one object with the same replacement inside strings,
-  object keys and numbers;
+  object keys, numbers, booleans and `null`;
 - the `report.json` and `meta.json` of every failure bundle;
 - every error message, including one produced before a case runs, such as a
   rejected step argument.
+
+A string or an object key keeps its own text and is redacted in place. A number,
+a boolean or `null` has no text of its own to replace, so its JSON text is
+redacted and the result becomes a string: with the secret `1`, the number `10`
+becomes `"***0"`, and with the secret `true`, the boolean `true` becomes
+`"***"`. A token that contains no secret keeps its type.
 
 The replacement happens in the two places where `ta` writes results — the
 renderer and the bundle writer — not in each driver, so a new driver or reporter
@@ -377,8 +383,10 @@ Summary: 1 case (0 passed, 1 failed, 0 errors, 0 filtered), 2 steps (1 passed, 1
 Redaction has limits that matter when you choose a value:
 
 - **Short secrets hide unrelated text.** A secret of `1` replaces every `1` in
-  the output, including digits of a status code or a duration. Use a value that
-  is long enough to be distinctive.
+  the output, including digits of a status code or a duration. It also rewrites
+  numbers in JSON: a timestamp such as `created_at` in `meta.json` becomes a
+  string with the digits replaced. Use a value that is long enough to be
+  distinctive.
 - **Only values `ta` read are secrets.** A program a case starts inherits the
   whole environment. If it prints a variable that no `${env:NAME}` reference
   read, `ta` never saw that value and cannot redact it.
@@ -386,9 +394,9 @@ Redaction has limits that matter when you choose a value:
   URL-encodes or otherwise transforms the value, the result no longer matches
   and appears as it is. The same holds for a value a program splits or
   reassembles.
-- **A number is redacted as a string.** When a secret looks like a number and a
-  service echoes it back as a JSON number, the JSON output shows the string
-  `"***"` there, so the type of that one value changes in the report.
+- **A JSON scalar changes type when it contains a secret.** A number, a boolean
+  or `null` that is redacted becomes a string, so the type of that one value
+  changes in the report.
 - **Only the value is secret.** The name of the variable and the fact that it is
   set are not.
 
@@ -505,7 +513,9 @@ steps:
 - There is no default-value syntax such as `${env:NAME:-fallback}`; a missing
   value is always an error, so a typo cannot silently use a fallback.
 - Only `${env:NAME}` is expanded inside a variable's value. A `${name}`
-  reference there stays as written, because only a step argument can resolve it.
+  reference there stays as written, even where the variable is later used in a
+  step argument: substitution is a single pass and does not rescan the text it
+  inserts.
 
 A value read from the environment is a **secret**, and `ta` replaces it with
 `***` in everything it writes. See [Secrets](#secrets).

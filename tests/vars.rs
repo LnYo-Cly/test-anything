@@ -17,6 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use serde_json::Value;
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
@@ -119,6 +120,31 @@ fn searchable_bytes(dirs: &[&Path]) -> Vec<u8> {
         }
     }
     all
+}
+
+/// The text of every scalar of a JSON value.
+///
+/// A secret can hide inside a number (`1` in `10`) or equal a boolean, and a
+/// byte search for the long distinctive value would not see it.
+fn scalar_texts(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(items) => items.iter().flat_map(scalar_texts).collect(),
+        Value::Object(entries) => entries.values().flat_map(scalar_texts).collect(),
+        Value::String(text) => vec![text.clone()],
+        Value::Number(number) => vec![number.to_string()],
+        Value::Bool(flag) => vec![flag.to_string()],
+        Value::Null => vec!["null".to_string()],
+    }
+}
+
+/// Asserts that no scalar of `value` still contains `secret`.
+fn assert_no_scalar_contains(value: &Value, secret: &str, context: &str) {
+    for text in scalar_texts(value) {
+        assert!(
+            !text.contains(secret),
+            "{context}: a JSON scalar still contains {secret:?}: {text:?}"
+        );
+    }
 }
 
 #[test]
@@ -557,13 +583,20 @@ steps:
 /// message must not appear in any output channel or in any bundle file.
 ///
 /// The case prints the secret on a child process's standard output (an inner
-/// `ta` echoes it), puts it in a request header that the local server echoes
-/// back, and then fails, so a bundle is written.
+/// `ta` echoes it), puts it in request headers that the local server echoes
+/// back, reads a body with one number, one boolean and one null, and then
+/// fails, so a bundle is written. Three secrets are used: a distinctive string,
+/// a short one (`1`) that also occurs inside numbers, and a literal (`true`)
+/// that equals a JSON boolean.
 #[test]
 #[cfg(all(feature = "cli", feature = "http"))]
 fn a_secret_from_the_environment_never_reaches_output_or_a_bundle() {
     const SECRET: &str = "s3cr3t-TA-LEAK-4242";
     const NAME: &str = "TA_TEST_LEAK_SECRET";
+    const SHORT: &str = "1";
+    const SHORT_NAME: &str = "TA_TEST_LEAK_SHORT";
+    const LITERAL: &str = "true";
+    const LITERAL_NAME: &str = "TA_TEST_LEAK_LITERAL";
 
     let server = support::TestServer::start();
     let dir = TempDir::new("leak-gate");
@@ -587,8 +620,10 @@ steps:
       command: '{ta}'
       args: ["--output", "json", "run", '{inner}', "--var", "probe=${{env:{name}}}", "--no-bundle"]
   - http.request:
+      url: {base}/scalars
+  - http.request:
       url: {base}/echo
-      headers: {{ authorization: "Bearer ${{env:{name}}}" }}
+      headers: {{ authorization: "Bearer ${{env:{name}}}", x-short: "${{env:{short}}}", x-literal: "${{env:{literal}}}" }}
     expect:
       - path: $.body.headers.authorization
         equals: "Bearer nope"
@@ -596,15 +631,18 @@ steps:
             ta = ta(),
             inner = inner.display(),
             name = NAME,
+            short = SHORT_NAME,
+            literal = LITERAL_NAME,
             base = server.url("")
         ),
     );
+    let environment = [(NAME, SECRET), (SHORT_NAME, SHORT), (LITERAL_NAME, LITERAL)];
 
     let text_dir = dir.path().join("bundles-text");
     let text = run_ta_with_env(
         dir.path(),
         &["run", path_str(&case), "--bundle-dir", path_str(&text_dir)],
-        &[(NAME, SECRET)],
+        &environment,
     );
     assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
 
@@ -619,7 +657,7 @@ steps:
             "--bundle-dir",
             path_str(&json_dir),
         ],
-        &[(NAME, SECRET)],
+        &environment,
     );
     assert_eq!(exit_code(&json), Some(1), "stderr: {:?}", stderr(&json));
 
@@ -633,16 +671,25 @@ steps:
         ("json stdout", &json_stdout),
         ("json stderr", &json_stderr),
     ] {
-        assert!(
-            !content.contains(SECRET),
-            "{channel} leaked the secret: {content}"
-        );
+        for secret in [SECRET, SHORT, LITERAL] {
+            assert!(
+                !content.contains(secret),
+                "{channel} leaked {secret:?}: {content}"
+            );
+        }
     }
     for (channel, content) in [("text stdout", &text_stdout), ("json stdout", &json_stdout)] {
         assert!(
             content.contains("***"),
             "{channel} must show the redaction marker: {content}"
         );
+    }
+
+    // The JSON tree is where a scalar can survive: a secret inside a number or
+    // equal to a boolean is not visible to a byte search for the long value.
+    let parsed: Value = serde_json::from_str(&json_stdout).expect("stdout must be one JSON object");
+    for secret in [SECRET, SHORT, LITERAL] {
+        assert_no_scalar_contains(&parsed, secret, "json stdout");
     }
 
     for dir in [&text_dir, &json_dir] {
@@ -653,6 +700,16 @@ steps:
                 "{} leaked the secret: {text}",
                 path.display()
             );
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let value: Value = serde_json::from_slice(&bytes)
+                    .unwrap_or_else(|error| panic!("{} must be JSON: {error}", path.display()));
+                for secret in [SECRET, SHORT, LITERAL] {
+                    assert_no_scalar_contains(&value, secret, &path.display().to_string());
+                }
+            }
         }
     }
     let bundles = searchable_bytes(&[&text_dir, &json_dir]);

@@ -59,17 +59,18 @@ impl Secrets {
     ///
     /// It runs on the tree rather than on the serialized text: a secret that
     /// contains `"` or `\` is escaped in the text, so a textual replacement
-    /// would miss it. Numbers are covered too, because a service can echo a
-    /// numeric token back as a number.
+    /// would miss it.
+    ///
+    /// A string keeps its own text and is redacted in place. A number, a
+    /// boolean or null has no inner text to replace, so its JSON text is
+    /// redacted and the result becomes a string: `10` with the secret `1`
+    /// becomes `"***0"`, and `true` with the secret `true` becomes `"***"`.
     pub fn redact_json(&self, value: &Value) -> Value {
         if self.values.is_empty() {
             return value.clone();
         }
         match value {
             Value::String(text) => Value::String(self.redact(text)),
-            Value::Number(number) if self.values.contains(&number.to_string()) => {
-                Value::String(MARKER.to_string())
-            }
             Value::Array(items) => {
                 Value::Array(items.iter().map(|item| self.redact_json(item)).collect())
             }
@@ -80,7 +81,23 @@ impl Secrets {
                 }
                 Value::Object(redacted)
             }
-            other => other.clone(),
+            Value::Number(number) => self.redact_scalar(&number.to_string(), value),
+            Value::Bool(flag) => self.redact_scalar(&flag.to_string(), value),
+            Value::Null => self.redact_scalar("null", value),
+        }
+    }
+
+    /// Redacts the JSON text of a scalar that cannot hold text of its own.
+    ///
+    /// A token that contains no secret keeps its type; one that does becomes a
+    /// string, because a partly replaced number or boolean is not a valid token
+    /// of its original type.
+    fn redact_scalar(&self, text: &str, original: &Value) -> Value {
+        let redacted = self.redact(text);
+        if redacted == text {
+            original.clone()
+        } else {
+            Value::String(redacted)
         }
     }
 }
@@ -167,6 +184,45 @@ mod tests {
             !serde_json::to_string(&redacted)
                 .expect("the redacted value must serialize")
                 .contains("a\\\"b")
+        );
+    }
+
+    #[test]
+    fn a_secret_inside_a_json_number_replaces_its_text() {
+        let mut secrets = Secrets::new();
+        secrets.record("1");
+        secrets.record("4242");
+
+        // A JSON scalar has no text to replace in place, so it becomes the
+        // redacted text: `10` with the secret `1` is `"***0"`, not `"***"`.
+        // `2` contains neither secret and stays a number.
+        assert_eq!(
+            secrets.redact_json(&json!({
+                "ten": 10,
+                "float": 1.5,
+                "negative": -21,
+                "embedded": 42424242,
+                "two": 2,
+            })),
+            json!({
+                "ten": "***0",
+                "float": "***.5",
+                "negative": "-2***",
+                "embedded": "******",
+                "two": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn a_secret_that_is_a_json_boolean_or_null_replaces_its_text() {
+        let mut secrets = Secrets::new();
+        secrets.record("true");
+        secrets.record("null");
+
+        assert_eq!(
+            secrets.redact_json(&json!({"yes": true, "no": false, "nothing": null})),
+            json!({"yes": "***", "no": false, "nothing": "***"})
         );
     }
 }
