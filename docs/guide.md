@@ -9,6 +9,8 @@ The complete reference for `ta`: installation options, building from source, the
 - [Test](#test)
   - [Self-test suite](#self-test-suite)
 - [Usage](#usage)
+  - [Linting](#linting)
+  - [Schema](#schema)
 - [Case files](#case-files)
   - [Variables](#variables)
   - [Assertions](#assertions)
@@ -112,8 +114,11 @@ ta run cases/ --var token=abc --var user=alice
 ta run cases/ --bundle-dir /tmp/ta-failures
 ta run cases/ --no-bundle
 ta --output json run cases/
-ta lint cases/        # not implemented yet
-ta schema             # not implemented yet
+ta lint cases/
+ta lint cases/ --var token=abc
+ta --output json lint cases/
+ta schema
+ta --output json schema > ta-case.schema.json
 ```
 
 `ta run` accepts files and directories. A directory is searched recursively for
@@ -129,6 +134,84 @@ repeated. It overrides a variable of the same name in the case's `vars:`. A
 
 `--bundle-dir <directory>` changes where failure bundles are written (see
 [Failure bundles](#failure-bundles)); `--no-bundle` turns them off.
+
+### Linting
+
+`ta lint` takes the same files and directories as `ta run`, and the same
+`--var name=value`. It discovers, loads and validates every case with the same
+preflight that `ta run` uses, but it does not execute a step, write a failure
+bundle or emit run events. A case that lint accepts is a case that `ta run`
+accepts before it starts; problems that only appear while a step runs, such as
+an unreachable target, are outside lint's scope.
+
+Unlike a run, lint reports every problem in every file instead of stopping at
+the first one. Text output writes one line per problem as `file: message` and
+ends with a summary:
+
+```text
+cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
+cases/logout.yaml: line 4: unknown field `naem`
+Checked 2 files: 2 errors.
+```
+
+`--output json` writes exactly one object:
+
+```json
+{
+  "ok": false,
+  "files": 2,
+  "errors": [
+    {
+      "file": "cases/login.yaml",
+      "message": "step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step"
+    }
+  ]
+}
+```
+
+The exit code is 0 when every case is valid and 3 when anything is invalid,
+including a path that cannot be read and a directory with no case files. Use
+`ta lint tests/self --var ta=target/debug/ta` to check the self suite without
+running it.
+
+### Schema
+
+`ta schema` prints a [JSON Schema](https://json-schema.org/) (draft 2020-12) for
+one case file. The schema follows the parser: only `name`, `vars` and `steps`
+at the top level; one registered step name per step, plus optional `expect` and
+`save`; the four comparisons with their value types; and each step's argument
+schema under `$defs`, together with the step's description. The registry builds
+it, so a build with fewer drivers describes fewer steps. `--output text` (the
+default) pretty-prints the schema and `--output json` prints it compactly; both
+are the same document, and the command exits 0.
+
+Save the output as a file next to the cases and point an editor at it. For
+[yaml-language-server](https://github.com/redhat-developer/yaml-language-server),
+add a modeline to each case file:
+
+```yaml
+# yaml-language-server: $schema=./ta-case.schema.json
+name: Login returns a token
+steps:
+  - http.request:
+      url: http://127.0.0.1:8080/health
+```
+
+Or point the server's `yaml.schemas` setting at the file once:
+
+```json
+{
+  "yaml.schemas": {
+    "./ta-case.schema.json": "cases/**/*.yaml"
+  }
+}
+```
+
+The schema describes the shape of a case, not every check: undefined variables,
+the syntax of JSON paths, and value constraints that a step checks itself (for
+example a timeout of at least 1) still need `ta lint`. A build with
+`--no-default-features` still prints a valid schema, but no step is registered,
+so the step item accepts nothing.
 
 ## Case files
 
@@ -375,7 +458,7 @@ file, with `file`, `message` and `kind`. Diagnostics never go to standard output
 | 3 | Invalid case file, invalid step arguments, unknown step or undefined variable |
 | 4 | Environment error (for example an unreachable target) |
 | 5 | Timeout |
-| 9 | Feature not implemented |
+| 9 | Reserved for a feature that is not implemented; no current command returns it |
 
 When several kinds of problem occur in one run, the most fundamental one wins:
 3, then 4, then 5, then 1.

@@ -112,8 +112,10 @@ Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https
 | Details | `ta --output json run …`: one JSON object with every step result and assertion |
 | Evidence after the run | A failure bundle per failed case: `case.yaml`, `report.json`, `meta.json` (written last) |
 | Inputs from outside | `--var name=value` for URLs, tokens and paths |
+| Check a case without running it | `ta lint cases/`: the same validation as `ta run`, every problem in every file, no step executed |
+| The case format, machine-readable | `ta schema`: a JSON Schema with every registered step, also usable by editors |
 
-Everything is in the [guide](docs/guide.md): [case format](docs/guide.md#case-files), [output](docs/guide.md#output), [failure bundles](docs/guide.md#failure-bundles), [exit codes](docs/guide.md#exit-codes).
+Everything is in the [guide](docs/guide.md): [case format](docs/guide.md#case-files), [output](docs/guide.md#output), [failure bundles](docs/guide.md#failure-bundles), [linting](docs/guide.md#linting), [schema](docs/guide.md#schema), [exit codes](docs/guide.md#exit-codes).
 
 ## Roadmap
 
@@ -122,7 +124,7 @@ Everything is in the [guide](docs/guide.md): [case format](docs/guide.md#case-fi
 - [x] YAML cases, assertions, variables, JSON output, precise exit codes
 - [x] `http.request` and `cli.run` steps, failure bundles, self-test suite
 - [x] One-line installers; Linux, macOS and Windows on x86_64 and Arm64
-- [ ] `ta lint` and `ta schema` — in progress
+- [x] `ta lint` and `ta schema`
 - [ ] Case classification and filters: project, suite, layer, tags
 - [ ] Read-only observers for network, database and logs
 - [ ] Web UI testing
