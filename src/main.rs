@@ -12,6 +12,7 @@ use test_anything::core::registry::Registry;
 use test_anything::core::report::RunOutcome;
 use test_anything::core::runner;
 use test_anything::core::schema;
+use test_anything::core::secrets::Secrets;
 use test_anything::drivers;
 use test_anything::exit::ExitCode as TaExitCode;
 
@@ -205,8 +206,17 @@ fn run(
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
 ) -> ExitCode {
-    let outcome = execute(paths, registry, sources, filters, bundle_dir, no_bundle);
-    let rendered = output::render(&outcome, format.into());
+    let mut secrets = Secrets::new();
+    let outcome = execute(
+        paths,
+        registry,
+        sources,
+        filters,
+        bundle_dir,
+        no_bundle,
+        &mut secrets,
+    );
+    let rendered = output::render(&outcome, format.into(), &secrets);
     // A write error must not replace the run's exit code. The common case is a
     // reader that exits early, such as `head` or `jq`; there is usually nowhere
     // left to report the failure either.
@@ -222,8 +232,9 @@ fn execute(
     filters: &Filters,
     bundle_dir: Option<PathBuf>,
     no_bundle: bool,
+    secrets: &mut Secrets,
 ) -> RunOutcome {
-    let LoadedCases { cases, errors, .. } = load_cases(paths, sources);
+    let LoadedCases { cases, errors, .. } = load_cases(paths, sources, secrets);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
@@ -237,7 +248,7 @@ fn execute(
     };
 
     let bus = EventBus::new();
-    runner::run(&cases, registry, &bus, bundles.as_mut(), filters)
+    runner::run(&cases, registry, &bus, bundles.as_mut(), filters, secrets)
 }
 
 /// Validates the cases without running them.
@@ -251,21 +262,22 @@ fn lint(
     registry: &Registry,
     sources: &VarSources,
 ) -> ExitCode {
+    let mut secrets = Secrets::new();
     let LoadedCases {
         files,
         cases,
         errors,
         ..
-    } = load_cases(paths, sources);
+    } = load_cases(paths, sources, &mut secrets);
     let mut errors = errors;
-    errors.extend(runner::preflight(&cases, registry));
+    errors.extend(runner::preflight(&cases, registry, &mut secrets));
 
     let report = output::LintReport {
         files: files.len(),
         errors,
         cases: cases.iter().map(output::LintCase::new).collect(),
     };
-    let rendered = output::render_lint(&report, format.into());
+    let rendered = output::render_lint(&report, format.into(), &secrets);
     let _ = write_stdout(&rendered.stdout);
     let _ = write_stderr(&rendered.stderr);
 
@@ -296,7 +308,7 @@ struct LoadedCases {
 ///
 /// A file that does not parse becomes an entry in `errors`; the remaining files
 /// still load, so lint can report every problem at once.
-fn load_cases(paths: &[PathBuf], sources: &VarSources) -> LoadedCases {
+fn load_cases(paths: &[PathBuf], sources: &VarSources, secrets: &mut Secrets) -> LoadedCases {
     let files = match case::discover(paths) {
         Ok(files) => files,
         Err(error) => {
@@ -322,15 +334,32 @@ fn load_cases(paths: &[PathBuf], sources: &VarSources) -> LoadedCases {
     let mut errors = Vec::new();
     // The command line beats the case file, and a later source beats an earlier
     // one: `vars:` first, then each `--vars-file` in order, then `--var`.
+    // A value in a vars file may itself reference the environment; the problem
+    // then belongs to that file, not to the case the value ends up in.
     let mut overrides: Vec<(String, String)> = Vec::new();
-    for (_, entries) in &sources.files {
-        overrides.extend(entries.iter().cloned());
+    for (file, entries) in &sources.files {
+        for (name, value) in entries {
+            match case::expand_env(value, secrets) {
+                Ok(value) => overrides.push((name.clone(), value)),
+                Err(message) => errors.push(CaseError {
+                    file: file.clone(),
+                    message: format!("variable `{name}`: {message}"),
+                }),
+            }
+        }
     }
     overrides.extend(sources.inline.iter().cloned());
 
     for file in &files {
         match case::load_file(file) {
             Ok(mut loaded_case) => {
+                if let Err(message) = case::expand_vars(&mut loaded_case.case.vars, secrets) {
+                    errors.push(CaseError {
+                        file: loaded_case.path.clone(),
+                        message,
+                    });
+                    continue;
+                }
                 // A case that does not use the name ignores it.
                 for (name, value) in &overrides {
                     loaded_case.case.vars.insert(name.clone(), value.clone());

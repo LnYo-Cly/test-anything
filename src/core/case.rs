@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use crate::core::paths;
+use crate::core::secrets::Secrets;
 use jsonpath_rust::JsonPath;
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -695,21 +696,27 @@ pub fn kind_name(value: &Value) -> &'static str {
 /// Expands every `${name}` reference inside `value`.
 ///
 /// The substitution is textual and applies to strings only, so a variable may
-/// not change the type of a value. `vars` supplies the defined names.
-pub fn interpolate(value: &Value, vars: &BTreeMap<String, String>) -> Result<Value, String> {
+/// not change the type of a value. `vars` supplies the defined names; a
+/// `${env:NAME}` reference reads the process environment and records its value
+/// in `secrets`.
+pub fn interpolate(
+    value: &Value,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<Value, String> {
     match value {
-        Value::String(text) => Ok(Value::String(interpolate_str(text, vars)?)),
+        Value::String(text) => Ok(Value::String(interpolate_str(text, vars, secrets)?)),
         Value::Array(items) => {
             let mut expanded = Vec::with_capacity(items.len());
             for item in items {
-                expanded.push(interpolate(item, vars)?);
+                expanded.push(interpolate(item, vars, secrets)?);
             }
             Ok(Value::Array(expanded))
         }
         Value::Object(entries) => {
             let mut expanded = Map::new();
             for (key, item) in entries {
-                expanded.insert(key.clone(), interpolate(item, vars)?);
+                expanded.insert(key.clone(), interpolate(item, vars, secrets)?);
             }
             Ok(Value::Object(expanded))
         }
@@ -717,7 +724,51 @@ pub fn interpolate(value: &Value, vars: &BTreeMap<String, String>) -> Result<Val
     }
 }
 
-fn interpolate_str(input: &str, vars: &BTreeMap<String, String>) -> Result<String, String> {
+fn interpolate_str(
+    input: &str,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<String, String> {
+    substitute(input, Some(vars), secrets)
+}
+
+/// Expands the `${env:NAME}` references of `text` and leaves every other
+/// reference as written.
+///
+/// A variable's own value uses this: it may contain a `${name}` that only a
+/// step argument resolves, so that reference must survive.
+pub fn expand_env(text: &str, secrets: &mut Secrets) -> Result<String, String> {
+    substitute(text, None, secrets)
+}
+
+/// Expands the environment references in a case's own `vars:` values.
+///
+/// The error names the variable, because the value has no line of its own by
+/// the time it is expanded.
+pub fn expand_vars(
+    vars: &mut BTreeMap<String, String>,
+    secrets: &mut Secrets,
+) -> Result<(), String> {
+    for (name, value) in vars.iter_mut() {
+        let expanded = expand_env(value, secrets)
+            .map_err(|message| format!("variable `{name}`: {message}"))?;
+        *value = expanded;
+    }
+    Ok(())
+}
+
+/// The prefix that marks an environment variable reference.
+const ENV_PREFIX: &str = "env:";
+
+/// Replaces the `${...}` references of `input`.
+///
+/// `vars` supplies the defined names. With `None`, an unknown name stays as
+/// written instead of being an error.
+fn substitute(
+    input: &str,
+    vars: Option<&BTreeMap<String, String>>,
+    secrets: &mut Secrets,
+) -> Result<String, String> {
     let mut output = String::with_capacity(input.len());
     let mut rest = input;
     while let Some(start) = rest.find("${") {
@@ -734,16 +785,60 @@ fn interpolate_str(input: &str, vars: &BTreeMap<String, String>) -> Result<Strin
                 "empty variable name in `{input}`; write `${{name}}`"
             ));
         }
-        let Some(value) = vars.get(name) else {
-            return Err(format!(
-                "undefined variable `${{{name}}}`; define it under `vars:` or save it in an earlier step"
-            ));
-        };
-        output.push_str(value);
+        match name.strip_prefix(ENV_PREFIX) {
+            Some(env_name) => output.push_str(&env_value(env_name, secrets)?),
+            None => match vars.and_then(|vars| vars.get(name)) {
+                Some(value) => output.push_str(value),
+                None if vars.is_some() => {
+                    return Err(format!(
+                        "undefined variable `${{{name}}}`; define it under `vars:` or save it in an earlier step"
+                    ));
+                }
+                None => {
+                    output.push_str("${");
+                    output.push_str(name);
+                    output.push('}');
+                }
+            },
+        }
         rest = &after[end + 1..];
     }
     output.push_str(rest);
     Ok(output)
+}
+
+/// Reads one environment variable and records its value as a secret.
+fn env_value(name: &str, secrets: &mut Secrets) -> Result<String, String> {
+    if name.is_empty() {
+        return Err("empty environment variable name; write `${env:NAME}`".to_string());
+    }
+    if !is_env_name(name) {
+        return Err(format!(
+            "`{name}` is not a valid environment variable name; use letters, digits and `_`, and do not start with a digit"
+        ));
+    }
+    match std::env::var(name) {
+        Ok(value) => {
+            secrets.record(&value);
+            Ok(value)
+        }
+        Err(std::env::VarError::NotPresent) => Err(format!(
+            "environment variable `{name}` is not set; set it before running"
+        )),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "environment variable `{name}` is not valid UTF-8; set it to text"
+        )),
+    }
+}
+
+/// Whether `name` is a usable environment variable name.
+fn is_env_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 /// Expands case files and directories into a sorted list of case files.
@@ -1041,16 +1136,76 @@ steps:
     fn interpolates_strings_and_reports_undefined_variables() {
         let vars = BTreeMap::from([("name".to_string(), "alice".to_string())]);
         let value = serde_json::json!({"who": "hi ${name}", "nested": ["${name}"]});
+        let mut secrets = Secrets::new();
 
-        let expanded = interpolate(&value, &vars).expect("the value must expand");
+        let expanded = interpolate(&value, &vars, &mut secrets).expect("the value must expand");
         assert_eq!(
             expanded,
             serde_json::json!({"who": "hi alice", "nested": ["alice"]})
         );
 
-        let error = interpolate(&serde_json::json!("${missing}"), &vars)
+        let error = interpolate(&serde_json::json!("${missing}"), &vars, &mut secrets)
             .expect_err("the reference must be rejected");
         assert!(error.contains("missing"), "got: {error}");
+    }
+
+    #[test]
+    fn a_variable_value_keeps_a_reference_it_cannot_resolve() {
+        let mut vars = BTreeMap::from([("template".to_string(), "${later}".to_string())]);
+        let mut secrets = Secrets::new();
+
+        expand_vars(&mut vars, &mut secrets).expect("a plain reference is not an error");
+
+        assert_eq!(vars["template"], "${later}");
+    }
+
+    #[test]
+    fn an_environment_reference_is_expanded_and_recorded_as_a_secret() {
+        // The test process's own environment is never changed: `PATH` is used
+        // because every platform that runs these tests has it.
+        let path = std::env::var("PATH").expect("the test process must have a PATH");
+
+        let vars = BTreeMap::new();
+        let mut secrets = Secrets::new();
+        let expanded = interpolate(
+            &serde_json::json!({"a": "${env:PATH}"}),
+            &vars,
+            &mut secrets,
+        )
+        .expect("the reference must expand");
+
+        assert_eq!(expanded, serde_json::json!({"a": path}));
+        assert_eq!(secrets.redact(&path), "***");
+
+        let mut values = BTreeMap::from([("from_env".to_string(), "${env:PATH}".to_string())]);
+        expand_vars(&mut values, &mut secrets).expect("the value must expand");
+        assert_eq!(values["from_env"], path);
+    }
+
+    #[test]
+    fn a_missing_environment_variable_names_itself_and_what_to_do() {
+        let mut secrets = Secrets::new();
+        let vars = BTreeMap::new();
+
+        let error = interpolate(
+            &serde_json::json!("${env:TA_CORE_UNIT_MISSING_5C9D}"),
+            &vars,
+            &mut secrets,
+        )
+        .expect_err("the reference must be rejected");
+
+        assert!(error.contains("TA_CORE_UNIT_MISSING_5C9D"), "got: {error}");
+        assert!(error.contains("set it before running"), "got: {error}");
+
+        for (reference, fragment) in [
+            ("${env:}", "empty environment variable name"),
+            ("${env:9BAD}", "not a valid environment variable name"),
+            ("${env:BAD-NAME}", "not a valid environment variable name"),
+        ] {
+            let error = interpolate(&serde_json::json!(reference), &vars, &mut secrets)
+                .expect_err("the reference must be rejected");
+            assert!(error.contains(fragment), "{reference}: {error}");
+        }
     }
 
     /// A case whose first step is `cli.run` followed by `extra`.

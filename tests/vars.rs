@@ -613,6 +613,8 @@ steps:
             !content.contains(SECRET),
             "{channel} leaked the secret: {content}"
         );
+    }
+    for (channel, content) in [("text stdout", &text_stdout), ("json stdout", &json_stdout)] {
         assert!(
             content.contains("***"),
             "{channel} must show the redaction marker: {content}"

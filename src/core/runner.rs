@@ -15,6 +15,7 @@ use crate::core::registry::{Registry, StepError};
 use crate::core::report::{
     CaseReport, CaseStatus, Problem, ProblemKind, RunOutcome, RunReport, StepReport, StepStatus,
 };
+use crate::core::secrets::Secrets;
 
 /// Validates every case, then runs the ones the filters select.
 ///
@@ -24,6 +25,10 @@ use crate::core::report::{
 /// all, because a partially executed run would make the result depend on case
 /// order.
 ///
+/// `secrets` collects every value that a `${env:NAME}` reference resolved.
+/// Validation resolves the references of every case before the first case runs,
+/// so the set is complete before the first failure bundle is written.
+///
 /// When `bundles` is given, every selected case that did not pass gets a
 /// failure bundle before the next case starts.
 pub fn run(
@@ -32,8 +37,9 @@ pub fn run(
     bus: &EventBus,
     mut bundles: Option<&mut FailureBundles>,
     filters: &Filters,
+    secrets: &mut Secrets,
 ) -> RunOutcome {
-    let errors = preflight(cases, registry);
+    let errors = preflight(cases, registry, secrets);
     if !errors.is_empty() {
         return RunOutcome::Rejected { errors };
     }
@@ -61,11 +67,11 @@ pub fn run(
             case: index,
             name: loaded.case.name.clone(),
         });
-        let mut report = run_case(index, loaded, registry, bus);
+        let mut report = run_case(index, loaded, registry, bus, secrets);
         if report.status != CaseStatus::Passed
             && let Some(writer) = bundles.as_deref_mut()
         {
-            match writer.write(index, &report) {
+            match writer.write(index, &report, secrets) {
                 Ok(directory) => report.bundle = Some(directory),
                 Err(message) => bundle_errors.push(message),
             }
@@ -96,7 +102,11 @@ pub fn run(
 ///
 /// `ta lint` calls the same function, so a case that lint accepts is a case
 /// the runner would not reject. Validation does not execute a step.
-pub fn preflight(cases: &[LoadedCase], registry: &Registry) -> Vec<CaseError> {
+pub fn preflight(
+    cases: &[LoadedCase],
+    registry: &Registry,
+    secrets: &mut Secrets,
+) -> Vec<CaseError> {
     let names = registry.names();
     let hint = if names.is_empty() {
         "no steps are registered; build with a driver feature enabled".to_string()
@@ -116,7 +126,7 @@ pub fn preflight(cases: &[LoadedCase], registry: &Registry) -> Vec<CaseError> {
         let mut vars = loaded.case.vars.clone();
         for (index, step) in loaded.case.steps.iter().enumerate() {
             let position = index + 1;
-            match case::interpolate(&step.args, &vars) {
+            match case::interpolate(&step.args, &vars, secrets) {
                 Err(message) => errors.push(CaseError {
                     file: loaded.path.clone(),
                     message: format!("step {position}: {message}"),
@@ -148,7 +158,13 @@ pub fn preflight(cases: &[LoadedCase], registry: &Registry) -> Vec<CaseError> {
     errors
 }
 
-fn run_case(index: usize, loaded: &LoadedCase, registry: &Registry, bus: &EventBus) -> CaseReport {
+fn run_case(
+    index: usize,
+    loaded: &LoadedCase,
+    registry: &Registry,
+    bus: &EventBus,
+    secrets: &mut Secrets,
+) -> CaseReport {
     let started = Instant::now();
     let mut vars = loaded.case.vars.clone();
     let mut steps = Vec::with_capacity(loaded.case.steps.len());
@@ -182,7 +198,7 @@ fn run_case(index: usize, loaded: &LoadedCase, registry: &Registry, bus: &EventB
             error: None,
         };
 
-        match execute_step(step, registry, &mut vars) {
+        match execute_step(step, registry, &mut vars, secrets) {
             Ok((result, assertions)) => {
                 let failed = assertions.iter().filter(|item| !item.passed).count();
                 if failed == 0 {
@@ -242,13 +258,14 @@ fn execute_step(
     step: &Step,
     registry: &Registry,
     vars: &mut BTreeMap<String, String>,
+    secrets: &mut Secrets,
 ) -> Result<(Value, Vec<AssertionReport>), Problem> {
     let definition = registry.get(&step.action).ok_or_else(|| Problem {
         kind: ProblemKind::InvalidInput,
         message: format!("`{}` is not a registered step", step.action),
     })?;
 
-    let args = case::interpolate(&step.args, vars).map_err(|message| Problem {
+    let args = case::interpolate(&step.args, vars, secrets).map_err(|message| Problem {
         kind: ProblemKind::Execution,
         message,
     })?;
@@ -413,6 +430,7 @@ mod tests {
             &bus,
             None,
             &Filters::default(),
+            &mut Secrets::new(),
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Success);
@@ -433,6 +451,7 @@ mod tests {
             &bus,
             None,
             &Filters::default(),
+            &mut Secrets::new(),
         );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::TestFailure);
@@ -464,7 +483,14 @@ mod tests {
             case: test_case("other", vec![broken]),
         });
 
-        let outcome = run(&cases, &registry(), &bus, None, &Filters::default());
+        let outcome = run(
+            &cases,
+            &registry(),
+            &bus,
+            None,
+            &Filters::default(),
+            &mut Secrets::new(),
+        );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Environment);
     }
@@ -488,7 +514,14 @@ mod tests {
                 .push(format!("{event:?}"));
         });
 
-        let outcome = run(&cases, &registry(), &bus, None, &Filters::default());
+        let outcome = run(
+            &cases,
+            &registry(),
+            &bus,
+            None,
+            &Filters::default(),
+            &mut Secrets::new(),
+        );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
         let RunOutcome::Rejected { errors } = outcome else {
@@ -534,6 +567,7 @@ mod tests {
             &bus,
             None,
             &Filters::default(),
+            &mut Secrets::new(),
         );
 
         assert!(outcome.is_ok());
@@ -576,6 +610,7 @@ mod tests {
             &bus,
             None,
             &Filters::default(),
+            &mut Secrets::new(),
         );
 
         assert!(outcome.is_ok(), "{outcome:?}");
@@ -609,6 +644,7 @@ mod tests {
             &bus,
             Some(&mut bundles),
             &Filters::default(),
+            &mut Secrets::new(),
         );
 
         let RunOutcome::Completed(report) = outcome else {
@@ -644,7 +680,14 @@ mod tests {
             ..Filters::default()
         };
 
-        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+        let outcome = run(
+            &cases,
+            &registry(),
+            &EventBus::new(),
+            None,
+            &filters,
+            &mut Secrets::new(),
+        );
 
         let RunOutcome::Completed(report) = outcome else {
             panic!("the run must complete");
@@ -667,7 +710,14 @@ mod tests {
             ..Filters::default()
         };
 
-        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+        let outcome = run(
+            &cases,
+            &registry(),
+            &EventBus::new(),
+            None,
+            &filters,
+            &mut Secrets::new(),
+        );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::Usage);
         let RunOutcome::NoMatch { message } = outcome else {
@@ -700,7 +750,14 @@ mod tests {
             ..Filters::default()
         };
 
-        let outcome = run(&cases, &registry(), &EventBus::new(), None, &filters);
+        let outcome = run(
+            &cases,
+            &registry(),
+            &EventBus::new(),
+            None,
+            &filters,
+            &mut Secrets::new(),
+        );
 
         assert_eq!(outcome.exit_code(), crate::exit::ExitCode::InvalidCase);
         let RunOutcome::Rejected { errors } = outcome else {
