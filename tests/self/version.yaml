@@ -1,12 +1,12 @@
-name: ta reports its version
+name: da reports its version
 steps:
   - cli.run:
-      command: ${ta}
+      command: ${da}
       args: ["--version"]
     expect:
       - path: $.exit_code
         equals: 0
       - path: $.stdout
-        contains: "ta"
+        contains: "da"
       - path: $.stderr
         equals: ""

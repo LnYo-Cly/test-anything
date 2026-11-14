@@ -228,7 +228,7 @@ impl RunReport {
     }
 }
 
-/// What `ta run` produced.
+/// What `da run` produced.
 #[derive(Debug, Clone)]
 pub enum RunOutcome {
     /// Nothing ran because at least one case is invalid.

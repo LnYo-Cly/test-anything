@@ -312,7 +312,7 @@ impl TempDir {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "ta-integration-{}-{label}-{unique}",
+            "da-integration-{}-{label}-{unique}",
             std::process::id()
         ));
         fs::create_dir_all(&path).expect("failed to create the temporary directory");

@@ -1882,14 +1882,14 @@ steps:
         let vars = BTreeMap::new();
 
         let error = interpolate(
-            &serde_json::json!("${env:TA_CORE_UNIT_MISSING_5C9D}"),
+            &serde_json::json!("${env:DA_CORE_UNIT_MISSING_5C9D}"),
             &vars,
             &mut secrets,
         )
         .expect_err("the reference must be rejected");
 
         assert!(
-            error.message.contains("TA_CORE_UNIT_MISSING_5C9D"),
+            error.message.contains("DA_CORE_UNIT_MISSING_5C9D"),
             "got: {error:?}"
         );
         assert!(
@@ -1912,7 +1912,7 @@ steps:
     ///
     /// The fixed first lines keep a fixture's own line numbers predictable.
     fn step_with(extra: &str) -> String {
-        format!("name: Broken\nsteps:\n  - cli.run:\n      command: ta\n{extra}")
+        format!("name: Broken\nsteps:\n  - cli.run:\n      command: da\n{extra}")
     }
 
     /// The typical structural mistakes of a case file and the node each one
@@ -1940,7 +1940,7 @@ steps:
                 "expected exactly one comparison",
             ),
             (
-                "name: Broken\nsteps:\n  - cli.run:\n      command: ta\n    other.step: {}\n"
+                "name: Broken\nsteps:\n  - cli.run:\n      command: da\n    other.step: {}\n"
                     .to_string(),
                 3,
                 5,
@@ -2021,7 +2021,7 @@ steps:
     #[test]
     fn a_variable_error_names_the_variable_line() {
         let error =
-            parse("name: Broken\nvars:\n  port: [8080]\nsteps:\n  - cli.run:\n      command: ta\n")
+            parse("name: Broken\nvars:\n  port: [8080]\nsteps:\n  - cli.run:\n      command: da\n")
                 .expect_err("the variable must be rejected");
 
         assert!(error.contains("port"), "got: {error}");
@@ -2076,7 +2076,7 @@ steps:
     #[test]
     fn a_vars_file_refuses_a_duplicate_key_without_the_parser_option_name() {
         let dir =
-            std::env::temp_dir().join(format!("ta-core-vars-duplicate-{}", std::process::id()));
+            std::env::temp_dir().join(format!("da-core-vars-duplicate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture directory");
         let path = dir.join("vars.yaml");
@@ -2096,7 +2096,7 @@ steps:
 
     #[test]
     fn discovers_yaml_files_recursively_in_order() {
-        let root = std::env::temp_dir().join(format!("ta-core-discover-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("da-core-discover-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("nested")).expect("create the fixture tree");
         std::fs::write(root.join("b.yaml"), "name: b\nsteps: []\n").expect("write b");
@@ -2122,7 +2122,7 @@ steps:
 
     #[test]
     fn a_vars_file_reads_strings_numbers_and_booleans_as_text() {
-        let dir = std::env::temp_dir().join(format!("ta-core-vars-file-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("da-core-vars-file-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture directory");
         let path = dir.join("vars.yaml");
@@ -2150,7 +2150,7 @@ steps:
 
     #[test]
     fn a_vars_file_value_that_is_not_scalar_names_its_line() {
-        let dir = std::env::temp_dir().join(format!("ta-core-vars-type-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("da-core-vars-type-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture directory");
         let path = dir.join("vars.yaml");
@@ -2171,7 +2171,7 @@ steps:
 
     #[test]
     fn a_vars_file_that_is_not_a_mapping_is_reported_with_its_file() {
-        let dir = std::env::temp_dir().join(format!("ta-core-vars-map-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("da-core-vars-map-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the fixture directory");
         let path = dir.join("vars.yaml");

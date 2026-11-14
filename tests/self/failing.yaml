@@ -1,8 +1,8 @@
 name: A failed assertion exits one and is visible in the JSON output
 steps:
   - cli.run:
-      command: ${ta}
-      args: [--output, json, run, tests/self/fixtures/failing.case, --no-bundle, --var, "ta=${ta}"]
+      command: ${da}
+      args: [--output, json, run, tests/self/fixtures/failing.case, --no-bundle, --var, "da=${da}"]
     expect:
       - path: $.exit_code
         equals: 1

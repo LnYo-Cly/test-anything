@@ -1,4 +1,4 @@
-//! Tests for `ta schema` and its agreement with the case parser.
+//! Tests for `da schema` and its agreement with the case parser.
 //!
 //! `jsonschema` is a dev-dependency only: production code builds the schema
 //! with `serde_json` and never validates anything at run time.
@@ -16,17 +16,17 @@ use serde_json::{Value, json};
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
-fn run_ta(args: &[&str]) -> Output {
+fn run_da(args: &[&str]) -> Output {
     let work = TempDir::new("schema-cwd");
-    Command::new(ta())
+    Command::new(da())
         .current_dir(work.path())
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 fn stdout(output: &Output) -> String {
@@ -40,16 +40,16 @@ fn stderr(output: &Output) -> String {
 /// The schema as `--output json` prints it, parsed once per test process.
 fn schema() -> &'static Value {
     static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
-        let output = run_ta(&["--output", "json", "schema"]);
+        let output = run_da(&["--output", "json", "schema"]);
         assert_eq!(
             output.status.code(),
             Some(0),
-            "`ta schema` must exit 0, stderr: {:?}",
+            "`da schema` must exit 0, stderr: {:?}",
             stderr(&output)
         );
         assert!(
             stderr(&output).is_empty(),
-            "`ta schema` must not write diagnostics, got: {:?}",
+            "`da schema` must not write diagnostics, got: {:?}",
             stderr(&output)
         );
         serde_json::from_slice(&output.stdout).expect("stdout must contain exactly one JSON value")
@@ -74,7 +74,7 @@ fn valid_instance() -> Value {
         "vars": {"port": 8080, "verbose": true},
         "steps": [
             {
-                "cli.run": {"command": "ta", "args": ["--version"]},
+                "cli.run": {"command": "da", "args": ["--version"]},
                 "expect": [{"path": "$.exit_code", "equals": 0}],
                 "save": {"version": "$.stdout"}
             }
@@ -84,11 +84,11 @@ fn valid_instance() -> Value {
 
 #[test]
 fn the_schema_is_one_json_object_in_both_output_modes() {
-    let output = run_ta(&["schema"]);
+    let output = run_da(&["schema"]);
     assert_eq!(
         output.status.code(),
         Some(0),
-        "`ta schema` must exit 0, stderr: {:?}",
+        "`da schema` must exit 0, stderr: {:?}",
         stderr(&output)
     );
 
@@ -173,7 +173,7 @@ fn non_string_case_names_pass_the_schema_and_lint() {
     for (yaml, label) in [("123", "number"), ("true", "boolean")] {
         let path = dir.write(
             &format!("name-{label}.yaml"),
-            &format!("name: {yaml}\nsteps:\n  - cli.run:\n      command: ta\n"),
+            &format!("name: {yaml}\nsteps:\n  - cli.run:\n      command: da\n"),
         );
         let text = fs::read_to_string(&path).expect("the case must be readable");
         let instance: Value = serde_saphyr::from_str(&text).expect("the case must be valid YAML");
@@ -186,11 +186,11 @@ fn non_string_case_names_pass_the_schema_and_lint() {
             "the schema rejected a case name the parser accepts: {instance}"
         );
 
-        let output = run_ta(&["lint", path.to_str().expect("the path must be UTF-8")]);
+        let output = run_da(&["lint", path.to_str().expect("the path must be UTF-8")]);
         assert_eq!(
             output.status.code(),
             Some(0),
-            "`ta lint` must accept `name: {yaml}`, stderr: {:?}",
+            "`da lint` must accept `name: {yaml}`, stderr: {:?}",
             stderr(&output)
         );
     }
@@ -228,7 +228,7 @@ fn an_unknown_comparison_is_rejected() {
     let instance = json!({
         "name": "Unknown comparison",
         "steps": [{
-            "cli.run": {"command": "ta"},
+            "cli.run": {"command": "da"},
             "expect": [{"path": "$.exit_code", "matches": 0}]
         }]
     });
@@ -251,10 +251,10 @@ fn a_cli_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
     assert_eq!(
         schema()["$defs"]["cli.run"]["properties"]["timeout_ms"]["minimum"],
         1,
-        "`ta schema` must carry the same bound"
+        "`da schema` must carry the same bound"
     );
 
-    let zero = json!({"command": "ta", "timeout_ms": 0});
+    let zero = json!({"command": "da", "timeout_ms": 0});
     assert!(
         (definition.validate)(&zero).is_err(),
         "validate must reject `timeout_ms: 0`"
@@ -278,7 +278,7 @@ fn an_http_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
     assert_eq!(
         schema()["$defs"]["http.request"]["properties"]["timeout_ms"]["minimum"],
         1,
-        "`ta schema` must carry the same bound"
+        "`da schema` must carry the same bound"
     );
 
     let zero = json!({"url": "http://127.0.0.1:1/health", "timeout_ms": 0});
@@ -296,7 +296,7 @@ fn an_http_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
 /// A registered step definition, for tests that compare the schema with
 /// `validate`.
 #[cfg(any(feature = "cli", feature = "http"))]
-fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition {
+fn step_definition(name: &str) -> do_anything::core::registry::StepDefinition {
     built_in_registry()
         .get(name)
         .unwrap_or_else(|| panic!("`{name}` must be registered"))
@@ -305,10 +305,10 @@ fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition 
 
 /// Every registered step definition, keyed by name.
 #[cfg(any(feature = "cli", feature = "db", feature = "http"))]
-fn built_in_registry() -> test_anything::core::registry::Registry {
-    let mut registry = test_anything::core::registry::Registry::new();
-    test_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
-    test_anything::drivers::register_observers(&mut registry)
+fn built_in_registry() -> do_anything::core::registry::Registry {
+    let mut registry = do_anything::core::registry::Registry::new();
+    do_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
+    do_anything::drivers::register_observers(&mut registry)
         .expect("the built-in observers must register");
     registry
 }
@@ -320,7 +320,7 @@ fn built_in_registry() -> test_anything::core::registry::Registry {
 #[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 fn valid_arguments(step: &str) -> Value {
     match step {
-        "cli.run" => json!({"command": "ta"}),
+        "cli.run" => json!({"command": "da"}),
         "http.request" => json!({"url": "http://127.0.0.1:1/health"}),
         "db.query" => json!({"url": "sqlite:app.db", "sql": "SELECT 1"}),
         other => panic!("add the valid arguments of `{other}` to this test"),
@@ -421,7 +421,7 @@ fn every_declared_argument_bound_is_enforced_by_validate() {
                 );
 
                 // The value on the boundary itself must be accepted, so that
-                // `ta schema` does not promise a value that `ta run` refuses.
+                // `da schema` does not promise a value that `da run` refuses.
                 if let Some(allowed) = allowed {
                     let mut args = base.clone();
                     args[argument] = allowed;
@@ -448,7 +448,7 @@ fn an_unknown_step_argument_is_rejected() {
     let validator = validator(schema());
     let instance = json!({
         "name": "Unknown argument",
-        "steps": [{"cli.run": {"command": "ta", "bogus": true}}]
+        "steps": [{"cli.run": {"command": "da", "bogus": true}}]
     });
 
     assert!(
@@ -457,7 +457,7 @@ fn an_unknown_step_argument_is_rejected() {
     );
 }
 
-/// The `observe` block and the observers behind it, as `ta schema` describes
+/// The `observe` block and the observers behind it, as `da schema` describes
 /// them.
 #[cfg(all(feature = "log", feature = "cli"))]
 #[test]
@@ -494,7 +494,7 @@ fn the_schema_describes_observe_and_every_registered_observer() {
     let valid = json!({
         "name": "Observed",
         "observe": {"app_log": {"log.file": {"path": "app.log"}}},
-        "steps": [{"cli.run": {"command": "ta"}}]
+        "steps": [{"cli.run": {"command": "da"}}]
     });
     assert!(
         validator.is_valid(&valid),
@@ -571,7 +571,7 @@ fn every_declared_observer_argument_bound_is_enforced_by_validate() {
         assert_eq!(
             schema()["$defs"][name]["properties"],
             definition.args_schema["properties"],
-            "`ta schema` must carry the observer's arguments"
+            "`da schema` must carry the observer's arguments"
         );
 
         let properties = definition.args_schema["properties"]
@@ -649,7 +649,7 @@ fn the_schema_accepts_every_valid_repository_case() {
 
     for file in files_with_extension(root.join("tests/self/fixtures"), "case") {
         let text = fs::read_to_string(&file).expect("the fixture must be readable");
-        if test_anything::core::case::parse(&text).is_err() {
+        if do_anything::core::case::parse(&text).is_err() {
             let instance: Value =
                 serde_saphyr::from_str(&text).expect("an invalid fixture is still valid YAML");
             assert!(
@@ -685,7 +685,7 @@ fn the_schema_accepts_every_case_example_in_the_docs() {
         let text = fs::read_to_string(root.join(doc)).expect("the document must be readable");
         for example in case_examples(&text) {
             assert!(
-                test_anything::core::case::parse(example).is_ok(),
+                do_anything::core::case::parse(example).is_ok(),
                 "an example in {doc} must parse as a case:
 {example}"
             );

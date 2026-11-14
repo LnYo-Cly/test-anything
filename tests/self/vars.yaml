@@ -1,8 +1,8 @@
 name: A variable from the command line reaches the case it runs
 steps:
   - cli.run:
-      command: ${ta}
-      args: [run, tests/self/fixtures/vars.case, --no-bundle, --var, "ta=${ta}", --var, target=tests/self/fixtures/passing.case]
+      command: ${da}
+      args: [run, tests/self/fixtures/vars.case, --no-bundle, --var, "da=${da}", --var, target=tests/self/fixtures/passing.case]
     expect:
       - path: $.exit_code
         equals: 0

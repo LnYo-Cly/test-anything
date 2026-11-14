@@ -13,7 +13,7 @@ steps:
   # Nothing writes to the log during this step, so the observation is empty
   # even when an earlier run left the file behind.
   - cli.run:
-      command: ${ta}
+      command: ${da}
       args: ["--version"]
     expect:
       - path: $.exit_code
@@ -22,7 +22,7 @@ steps:
         equals: []
   - cli.run:
       command: git
-      args: ["config", "--file", "${log}", "--add", "ta.line", "order created"]
+      args: ["config", "--file", "${log}", "--add", "da.line", "order created"]
     expect:
       - path: $.exit_code
         equals: 0

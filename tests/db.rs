@@ -3,7 +3,7 @@
 //! Every SQLite test prepares its own database file with `rusqlite` in a
 //! temporary directory and then runs the compiled binary against it, so no
 //! database file is ever committed. The PostgreSQL tests need a server: they
-//! read `TA_TEST_POSTGRES_URL` and print why they are skipped when it is unset.
+//! read `DA_TEST_POSTGRES_URL` and print why they are skipped when it is unset.
 
 // The whole file needs the built-in database step; a build without it compiles
 // an empty test target.
@@ -22,27 +22,27 @@ use serde_json::Value;
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 /// Runs the binary with `dir` as its working directory and extra variables.
-fn run_ta_with_env(dir: &Path, args: &[&str], environment: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(ta());
+fn run_da_with_env(dir: &Path, args: &[&str], environment: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(da());
     command.current_dir(dir).args(args);
     for (name, value) in environment {
         command.env(name, value);
     }
-    command.output().expect("failed to run the ta binary")
+    command.output().expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -80,7 +80,7 @@ fn rows_of(output: &Output) -> Value {
 /// Runs one case and returns its output.
 fn run_case(dir: &TempDir, case: &str) -> Output {
     let path = dir.write("case.yaml", case);
-    run_ta_in(
+    run_da_in(
         dir.path(),
         &["--output", "json", "run", path_str(&path), "--no-bundle"],
     )
@@ -399,7 +399,7 @@ fn an_unreachable_postgres_server_is_an_environment_error() {
 name: The database is not there
 steps:
   - db.query:
-      url: "postgres://ta:secret@127.0.0.1:{port}/app?sslmode=disable"
+      url: "postgres://da:secret@127.0.0.1:{port}/app?sslmode=disable"
       sql: SELECT 1
       timeout_ms: 5000
 "#
@@ -416,8 +416,8 @@ steps:
 
 #[test]
 fn a_connection_string_from_the_environment_is_redacted_everywhere() {
-    const SECRET: &str = "s3cr3t-TA-DB-4242";
-    const NAME: &str = "TA_TEST_DB_SECRET_DIR";
+    const SECRET: &str = "s3cr3t-DA-DB-4242";
+    const NAME: &str = "DA_TEST_DB_SECRET_DIR";
 
     let dir = TempDir::new("db-secret");
     let secret_dir = dir.path().join(SECRET);
@@ -432,16 +432,16 @@ fn a_connection_string_from_the_environment_is_redacted_everywhere() {
 name: Reads a database named by an environment variable
 steps:
   - db.query:
-      url: 'sqlite:${env:TA_TEST_DB_SECRET_DIR}/app.db'
+      url: 'sqlite:${env:DA_TEST_DB_SECRET_DIR}/app.db'
       sql: SELECT name FROM items WHERE id = 1
   - db.query:
-      url: 'sqlite:${env:TA_TEST_DB_SECRET_DIR}/missing.db'
+      url: 'sqlite:${env:DA_TEST_DB_SECRET_DIR}/missing.db'
       sql: SELECT 1
 "#;
     let path = dir.write("case.yaml", case);
     let bundle = dir.path().join("bundles");
 
-    let output = run_ta_with_env(
+    let output = run_da_with_env(
         dir.path(),
         &[
             "--output",
@@ -498,13 +498,13 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// PostgreSQL. The server comes from `TA_TEST_POSTGRES_URL`; without it these
+// PostgreSQL. The server comes from `DA_TEST_POSTGRES_URL`; without it these
 // tests skip and print why.
 // ---------------------------------------------------------------------------
 
 /// The PostgreSQL URL the tests run against, if one was configured.
 fn postgres_url() -> Option<String> {
-    match std::env::var("TA_TEST_POSTGRES_URL") {
+    match std::env::var("DA_TEST_POSTGRES_URL") {
         Ok(url) if !url.trim().is_empty() => Some(url),
         _ => None,
     }
@@ -519,7 +519,7 @@ fn postgres_or_skip(test: &str) -> Option<String> {
             // `cargo test -- --nocapture` is where the reason appears.
             let _ = writeln!(
                 io::stderr(),
-                "skipping `{test}`: TA_TEST_POSTGRES_URL is not set, so there is no PostgreSQL server to query"
+                "skipping `{test}`: DA_TEST_POSTGRES_URL is not set, so there is no PostgreSQL server to query"
             );
             None
         }
@@ -530,7 +530,7 @@ fn postgres_or_skip(test: &str) -> Option<String> {
 fn postgres_table(url: &str) -> &'static str {
     static TABLE: OnceLock<String> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let table = format!("ta_db_query_{}", std::process::id());
+        let table = format!("da_db_query_{}", std::process::id());
         let mut client = postgres::Client::connect(url, postgres::NoTls)
             .expect("the PostgreSQL test server must accept the connection");
         client
@@ -724,7 +724,7 @@ name: Reads a table that is not there
 steps:
   - db.query:
       url: '{url}'
-      sql: SELECT * FROM ta_no_such_table_for_a_test
+      sql: SELECT * FROM da_no_such_table_for_a_test
 "#
     );
 
@@ -738,7 +738,7 @@ steps:
     // checks the SQLSTATE and the table name, which are not.
     assert!(said.contains("42P01"), "the SQLSTATE must be shown: {said}");
     assert!(
-        said.contains("ta_no_such_table_for_a_test"),
+        said.contains("da_no_such_table_for_a_test"),
         "the server's own message must be shown: {said}"
     );
     assert!(

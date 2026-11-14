@@ -414,6 +414,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "do-anything"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "jsonpath-rust",
+ "jsonschema",
+ "postgres",
+ "rusqlite",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "tokio-postgres-rustls",
+ "ureq",
+ "wait-timeout",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1764,25 +1783,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
-]
-
-[[package]]
-name = "test-anything"
-version = "0.5.0"
-dependencies = [
- "clap",
- "jsonpath-rust",
- "jsonschema",
- "postgres",
- "rusqlite",
- "rustls",
- "schemars",
- "serde",
- "serde-saphyr",
- "serde_json",
- "tokio-postgres-rustls",
- "ureq",
- "wait-timeout",
 ]
 
 [[package]]

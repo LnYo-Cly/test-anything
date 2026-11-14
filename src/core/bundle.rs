@@ -19,7 +19,7 @@ use crate::core::secrets::Secrets;
 /// Version of the bundle layout this build writes.
 pub const SCHEMA_VERSION: u64 = 1;
 /// Directory that holds failure bundles unless `--bundle-dir` is given.
-pub const DEFAULT_DIRECTORY: &str = ".ta/failures";
+pub const DEFAULT_DIRECTORY: &str = ".da/failures";
 /// Longest part of a directory name taken from a case name.
 const MAX_NAME: usize = 40;
 
@@ -147,7 +147,7 @@ fn write_meta(dir: &Path, case: &CaseReport, secrets: &Secrets) -> Result<(), St
         &dir.join("meta.json"),
         &secrets.redact_json(&json!({
             "schema_version": SCHEMA_VERSION,
-            "ta_version": env!("CARGO_PKG_VERSION"),
+            "da_version": env!("CARGO_PKG_VERSION"),
             "case_file": paths::display(&case.file),
             "case_name": case.name,
             "project": case.project,
@@ -279,7 +279,7 @@ mod tests {
 
     fn fixture(label: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("ta-core-bundle-{}-{label}", std::process::id()));
+            std::env::temp_dir().join(format!("da-core-bundle-{}-{label}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
         dir
@@ -328,7 +328,7 @@ mod tests {
         )
         .expect("meta.json must be JSON");
         assert_eq!(meta["schema_version"], json!(SCHEMA_VERSION));
-        assert_eq!(meta["ta_version"], json!(env!("CARGO_PKG_VERSION")));
+        assert_eq!(meta["da_version"], json!(env!("CARGO_PKG_VERSION")));
         assert_eq!(meta["case_name"], json!("Wrong exit code"));
         assert_eq!(meta["project"], json!("shop"));
         assert_eq!(meta["suite"], json!("smoke"));
@@ -359,7 +359,7 @@ mod tests {
     fn a_secret_is_redacted_in_the_report_and_the_metadata_but_not_in_the_case_copy() {
         let dir = fixture("redacted");
         let source = dir.join("case.yaml");
-        let case_text = "name: Wrong exit code\nsteps:\n  - cli.run:\n      args: [\"${env:TA_BUNDLE_TOKEN}\"]\n";
+        let case_text = "name: Wrong exit code\nsteps:\n  - cli.run:\n      args: [\"${env:DA_BUNDLE_TOKEN}\"]\n";
         std::fs::write(&source, case_text).expect("the case file must be written");
         let mut bundles = FailureBundles::new(dir.join("failures"));
         let mut case = failing_case(source);

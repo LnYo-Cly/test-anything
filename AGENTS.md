@@ -85,7 +85,7 @@ Follow project governance standards during delivery and collaboration:
 
 Repository-specific rules may be added here after explicit diagnosis; the deterministic base and vertical overlay above remain unchanged.
 
-### test-anything rules
+### do-anything rules
 
 - Follow [CONTRIBUTING.md](CONTRIBUTING.md): commit and pull request format, project structure, code rules, tests and dependency policy. It is the authority for repository conventions.
 - Before adding a dependency, search crates.io, lib.rs and GitHub and record the comparison as CONTRIBUTING.md requires. If you cannot search, stop and report which library you need and why.
