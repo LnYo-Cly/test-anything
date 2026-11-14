@@ -3,8 +3,8 @@ vars:
   target: does-not-exist.yaml
 steps:
   - cli.run:
-      command: ${ta}
-      args: ["run", "${target}", "--var", "ta=${ta}"]
+      command: ${da}
+      args: ["run", "${target}", "--var", "da=${da}"]
     expect:
       - path: $.exit_code
         equals: 0

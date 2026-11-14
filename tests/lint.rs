@@ -1,4 +1,4 @@
-//! End-to-end tests for `ta lint`.
+//! End-to-end tests for `da lint`.
 //!
 //! Every test runs the compiled binary. Cases that need a driver are gated on
 //! the matching feature so that a build without drivers still has a green test
@@ -14,23 +14,23 @@ use serde_json::Value;
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with an empty working directory of its own.
-fn run_ta(args: &[&str]) -> Output {
+fn run_da(args: &[&str]) -> Output {
     let work = TempDir::new("lint-cwd");
-    run_ta_in(work.path(), args)
+    run_da_in(work.path(), args)
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -49,7 +49,7 @@ fn path_str(path: &Path) -> &str {
     path.to_str().expect("test paths must be valid UTF-8")
 }
 
-/// A path the way `ta` reports it: `/` separated on every platform.
+/// A path the way `da` reports it: `/` separated on every platform.
 fn reported(path: &Path) -> String {
     path_str(path).replace('\\', "/")
 }
@@ -88,37 +88,37 @@ fn structural_mistakes() -> Vec<(&'static str, &'static str, u64, u64)> {
     vec![
         (
             "unknown-assertion-field.yaml",
-            "name: Equal typo\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - path: $.exit_code\n        equal: 0\n",
+            "name: Equal typo\nsteps:\n  - cli.run:\n      command: da\n    expect:\n      - path: $.exit_code\n        equal: 0\n",
             6,
             9,
         ),
         (
             "missing-path.yaml",
-            "name: Missing path\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - equals: 0\n",
+            "name: Missing path\nsteps:\n  - cli.run:\n      command: da\n    expect:\n      - equals: 0\n",
             6,
             9,
         ),
         (
             "two-comparisons.yaml",
-            "name: Two comparisons\nsteps:\n  - cli.run:\n      command: ta\n    expect:\n      - path: $.exit_code\n        equals: 0\n        contains: '0'\n",
+            "name: Two comparisons\nsteps:\n  - cli.run:\n      command: da\n    expect:\n      - path: $.exit_code\n        equals: 0\n        contains: '0'\n",
             6,
             9,
         ),
         (
             "two-actions.yaml",
-            "name: Two actions\nsteps:\n  - cli.run:\n      command: ta\n    other.step: {}\n",
+            "name: Two actions\nsteps:\n  - cli.run:\n      command: da\n    other.step: {}\n",
             3,
             5,
         ),
         (
             "save-not-a-string.yaml",
-            "name: Save not a string\nsteps:\n  - cli.run:\n      command: ta\n    save:\n      code: 3\n",
+            "name: Save not a string\nsteps:\n  - cli.run:\n      command: da\n    save:\n      code: 3\n",
             6,
             13,
         ),
         (
             "unknown-top-level-field.yaml",
-            "name: Unknown field\nnaem: typo\nsteps:\n  - cli.run:\n      command: ta\n",
+            "name: Unknown field\nnaem: typo\nsteps:\n  - cli.run:\n      command: da\n",
             2,
             1,
         ),
@@ -143,7 +143,7 @@ fn every_case_error_names_its_line_and_column() {
         let case = dir.write(name, text);
         let location = format!("line {line} column {column}");
 
-        let output = run_ta(&["lint", path_str(&case)]);
+        let output = run_da(&["lint", path_str(&case)]);
         assert_eq!(
             exit_code(&output),
             Some(3),
@@ -162,7 +162,7 @@ fn every_case_error_names_its_line_and_column() {
             "{name}: the text error must keep the snippet caret, got: {text_out:?}"
         );
 
-        let json = run_ta(&["--output", "json", "lint", path_str(&case)]);
+        let json = run_da(&["--output", "json", "lint", path_str(&case)]);
         let value = json_stdout(&json);
         let message = value["errors"][0]["message"]
             .as_str()
@@ -178,7 +178,7 @@ fn every_case_error_names_its_line_and_column() {
     }
 }
 
-/// `ta run` rejects an invalid case through the same path as `ta lint`, so an
+/// `da run` rejects an invalid case through the same path as `da lint`, so an
 /// agent sees the same located message whichever command it used.
 #[test]
 fn run_and_lint_report_the_same_located_errors() {
@@ -187,14 +187,14 @@ fn run_and_lint_report_the_same_located_errors() {
         dir.write(name, text);
     }
 
-    let run = run_ta(&[
+    let run = run_da(&[
         "--output",
         "json",
         "run",
         path_str(dir.path()),
         "--no-bundle",
     ]);
-    let lint = run_ta(&["--output", "json", "lint", path_str(dir.path())]);
+    let lint = run_da(&["--output", "json", "lint", path_str(dir.path())]);
 
     assert_eq!(exit_code(&run), Some(3), "stderr: {:?}", stderr(&run));
     assert_eq!(exit_code(&lint), Some(3));
@@ -224,13 +224,13 @@ fn step_registry_mistakes() -> Vec<(&'static str, &'static str, u64, u64)> {
     vec![
         (
             "unknown-argument.yaml",
-            "name: Unknown argument\nsteps:\n  - cli.run:\n      command: ta\n      commnad: ta\n",
+            "name: Unknown argument\nsteps:\n  - cli.run:\n      command: da\n      commnad: da\n",
             4,
             7,
         ),
         (
             "invalid-argument.yaml",
-            "name: Invalid argument\nsteps:\n  - cli.run:\n      command: ta\n      timeout_ms: 0\n",
+            "name: Invalid argument\nsteps:\n  - cli.run:\n      command: da\n      timeout_ms: 0\n",
             4,
             7,
         ),
@@ -246,8 +246,8 @@ fn step_registry_mistakes() -> Vec<(&'static str, &'static str, u64, u64)> {
 /// The guard against a step error that reaches the registry without a source
 /// location.
 ///
-/// Every registry-level step error names its line and column in `ta lint` and
-/// in `ta run`, keeps the source snippet that makes the location readable, and
+/// Every registry-level step error names its line and column in `da lint` and
+/// in `da run`, keeps the source snippet that makes the location readable, and
 /// points at the node the user has to edit: the step name for an unregistered
 /// step, the argument mapping for arguments, and the value that holds the
 /// reference for an undefined variable. A new registry check adds an entry to
@@ -269,8 +269,8 @@ fn every_registry_step_error_names_its_line_and_column() {
         dir.write(name, text);
     }
 
-    let lint = run_ta(&["--output", "json", "lint", path_str(dir.path())]);
-    let run = run_ta(&[
+    let lint = run_da(&["--output", "json", "lint", path_str(dir.path())]);
+    let run = run_da(&[
         "--output",
         "json",
         "run",
@@ -327,10 +327,10 @@ fn a_valid_case_exits_zero_and_reports_the_file_count() {
     let dir = TempDir::new("lint-valid");
     let case = dir.write(
         "valid.yaml",
-        "name: Valid\nsteps:\n  - cli.run:\n      command: ta\n      args: [\"--version\"]\n",
+        "name: Valid\nsteps:\n  - cli.run:\n      command: da\n      args: [\"--version\"]\n",
     );
 
-    let output = run_ta(&["lint", path_str(&case)]);
+    let output = run_da(&["lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     let stdout = stdout(&output);
@@ -346,7 +346,7 @@ fn a_syntax_error_exits_three_and_reports_its_location() {
     let dir = TempDir::new("lint-syntax");
     let case = dir.write("broken.yaml", "name: Broken\nsteps:\n  - cli.run: [\n");
 
-    let output = run_ta(&["lint", path_str(&case)]);
+    let output = run_da(&["lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3), "stderr: {:?}", stderr(&output));
     let stdout = stdout(&output);
@@ -390,7 +390,7 @@ fn reported_paths_use_forward_slashes_only() {
     dir.write("broken.yaml", "name: Broken\nsteps:\n  - cli.run: [\n");
     let given = path_str(dir.path()).replace('\\', "/");
 
-    let text = run_ta(&["lint", &given]);
+    let text = run_da(&["lint", &given]);
     assert_eq!(exit_code(&text), Some(3), "stderr: {:?}", stderr(&text));
     assert!(
         !stdout(&text).contains('\\'),
@@ -398,7 +398,7 @@ fn reported_paths_use_forward_slashes_only() {
         stdout(&text)
     );
 
-    let json = run_ta(&["--output", "json", "lint", &given]);
+    let json = run_da(&["--output", "json", "lint", &given]);
     let value = json_stdout(&json);
     for error in value["errors"].as_array().expect("errors must be an array") {
         let file = error["file"].as_str().expect("every error names a file");
@@ -414,10 +414,10 @@ fn an_unknown_field_exits_three_with_a_line_number() {
     let dir = TempDir::new("lint-unknown-field");
     let case = dir.write(
         "unknown.yaml",
-        "name: Broken\nnaem: typo\nsteps:\n  - cli.run:\n      command: ta\n",
+        "name: Broken\nnaem: typo\nsteps:\n  - cli.run:\n      command: da\n",
     );
 
-    let output = run_ta(&["lint", path_str(&case)]);
+    let output = run_da(&["lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let stdout = stdout(&output);
@@ -437,7 +437,7 @@ fn an_unregistered_step_exits_three() {
         "name: Unknown\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let output = run_ta(&["lint", path_str(&case)]);
+    let output = run_da(&["lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -453,10 +453,10 @@ fn invalid_arguments_exit_three() {
     let dir = TempDir::new("lint-bad-args");
     let case = dir.write(
         "bad-args.yaml",
-        "name: Bad arguments\nsteps:\n  - cli.run:\n      command: ta\n      timeout_ms: 0\n",
+        "name: Bad arguments\nsteps:\n  - cli.run:\n      command: da\n      timeout_ms: 0\n",
     );
 
-    let output = run_ta(&["lint", path_str(&case)]);
+    let output = run_da(&["lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -475,7 +475,7 @@ fn an_undefined_variable_exits_three_and_var_defines_it() {
         "name: Variable\nsteps:\n  - cli.run:\n      command: ${target}\n",
     );
 
-    let without = run_ta(&["lint", path_str(&case)]);
+    let without = run_da(&["lint", path_str(&case)]);
     assert_eq!(exit_code(&without), Some(3));
     assert!(
         stdout(&without).contains("target"),
@@ -483,11 +483,11 @@ fn an_undefined_variable_exits_three_and_var_defines_it() {
         stdout(&without)
     );
 
-    let with = run_ta(&[
+    let with = run_da(&[
         "lint",
         path_str(&case),
         "--var",
-        &format!("target={}", ta()),
+        &format!("target={}", da()),
     ]);
     assert_eq!(exit_code(&with), Some(0), "stderr: {:?}", stderr(&with));
 }
@@ -498,14 +498,14 @@ fn every_error_of_every_file_is_reported_once() {
     dir.write("a.yaml", "name: A\nsteps: [\n");
     dir.write(
         "b.yaml",
-        "name: B\nnaem: typo\nsteps:\n  - cli.run:\n      command: ta\n",
+        "name: B\nnaem: typo\nsteps:\n  - cli.run:\n      command: da\n",
     );
     dir.write(
         "c.yaml",
         "name: C\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let output = run_ta(&["lint", path_str(dir.path())]);
+    let output = run_da(&["lint", path_str(dir.path())]);
 
     assert_eq!(exit_code(&output), Some(3), "stderr: {:?}", stderr(&output));
     let stdout = stdout(&output);
@@ -529,20 +529,20 @@ fn lint_does_not_execute_any_step() {
         "inner-failing.yaml",
         &format!(
             "name: Inner failing\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n    expect:\n      - path: $.exit_code\n        equals: 42\n",
-            ta()
+            da()
         ),
     );
     let outer = dir.write(
         "outer.yaml",
         &format!(
             "name: Would write a bundle\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"run\", '{}', \"--bundle-dir\", '{}']\n",
-            ta(),
+            da(),
             inner.display(),
             bundle.display()
         ),
     );
 
-    let linted = run_ta(&["lint", path_str(&outer)]);
+    let linted = run_da(&["lint", path_str(&outer)]);
     assert_eq!(exit_code(&linted), Some(0), "stderr: {:?}", stderr(&linted));
     assert!(
         !bundle.exists(),
@@ -552,7 +552,7 @@ fn lint_does_not_execute_any_step() {
 
     // Prove the fixture really would create the bundle when it runs, so the
     // assertion above tests lint rather than a case that does nothing.
-    let ran = run_ta_in(dir.path(), &["run", path_str(&outer), "--no-bundle"]);
+    let ran = run_da_in(dir.path(), &["run", path_str(&outer), "--no-bundle"]);
     assert_eq!(exit_code(&ran), Some(0), "stderr: {:?}", stderr(&ran));
     assert!(
         bundle.exists(),
@@ -566,21 +566,21 @@ fn lint_and_run_report_the_same_errors() {
     let dir = TempDir::new("lint-run-agree");
     dir.write(
         "a.yaml",
-        "name: A\nsteps:\n  - cli.run:\n      command: ta\n      timeout_ms: 0\n",
+        "name: A\nsteps:\n  - cli.run:\n      command: da\n      timeout_ms: 0\n",
     );
     dir.write(
         "b.yaml",
         "name: B\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let run = run_ta(&[
+    let run = run_da(&[
         "--output",
         "json",
         "run",
         path_str(dir.path()),
         "--no-bundle",
     ]);
-    let lint = run_ta(&["--output", "json", "lint", path_str(dir.path())]);
+    let lint = run_da(&["--output", "json", "lint", path_str(dir.path())]);
 
     assert_eq!(exit_code(&run), Some(3), "stderr: {:?}", stderr(&run));
     assert_eq!(exit_code(&lint), Some(3));
@@ -599,10 +599,10 @@ fn json_output_is_one_object_with_the_documented_fields() {
     let dir = TempDir::new("lint-json");
     let case = dir.write(
         "valid.yaml",
-        "name: Valid\nsteps:\n  - cli.run:\n      command: ta\n",
+        "name: Valid\nsteps:\n  - cli.run:\n      command: da\n",
     );
 
-    let output = run_ta(&["--output", "json", "lint", path_str(&case)]);
+    let output = run_da(&["--output", "json", "lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     let value = json_stdout(&output);
@@ -616,7 +616,7 @@ fn json_output_reports_an_error_and_exits_three() {
     let dir = TempDir::new("lint-json-error");
     let case = dir.write("broken.yaml", "name: Broken\nnaem: typo\nsteps: []\n");
 
-    let output = run_ta(&["--output", "json", "lint", path_str(&case)]);
+    let output = run_da(&["--output", "json", "lint", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let value = json_stdout(&output);
@@ -640,7 +640,7 @@ fn json_output_reports_an_error_and_exits_three() {
 
 #[test]
 fn a_missing_path_exits_three() {
-    let output = run_ta(&["lint", "does-not-exist.yaml"]);
+    let output = run_da(&["lint", "does-not-exist.yaml"]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -654,7 +654,7 @@ fn a_missing_path_exits_three() {
 fn a_directory_without_yaml_files_exits_three() {
     let dir = TempDir::new("lint-empty");
 
-    let output = run_ta(&["lint", path_str(dir.path())]);
+    let output = run_da(&["lint", path_str(dir.path())]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -666,7 +666,7 @@ fn a_directory_without_yaml_files_exits_three() {
 
 #[test]
 fn a_malformed_var_exits_two_with_the_expected_form() {
-    let output = run_ta(&["lint", "some.yaml", "--var", "novalue"]);
+    let output = run_da(&["lint", "some.yaml", "--var", "novalue"]);
 
     assert_eq!(exit_code(&output), Some(2));
     assert!(

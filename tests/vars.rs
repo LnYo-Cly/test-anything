@@ -21,40 +21,40 @@ use serde_json::Value;
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 /// Runs the binary with `dir` as its working directory and extra environment
 /// variables, which exist only in the child process.
-fn run_ta_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(ta());
+fn run_da_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(da());
     command.current_dir(dir).args(args);
     for (name, value) in envs {
         command.env(name, value);
     }
-    command.output().expect("failed to run the ta binary")
+    command.output().expect("failed to run the da binary")
 }
 
 /// Runs the binary with `dir` as its working directory and `name` removed from
 /// the environment, so a value set by the machine running the tests cannot make
 /// an "unset" test pass or fail by accident.
-fn run_ta_without_env(dir: &Path, args: &[&str], name: &str) -> Output {
-    Command::new(ta())
+fn run_da_without_env(dir: &Path, args: &[&str], name: &str) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .env_remove(name)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -77,7 +77,7 @@ fn path_str(path: &Path) -> &str {
 fn passing_case(name: &str) -> String {
     format!(
         "name: {name}\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-        ta()
+        da()
     )
 }
 
@@ -85,7 +85,7 @@ fn passing_case(name: &str) -> String {
 fn failing_case(name: &str) -> String {
     format!(
         "name: {name}\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n    expect:\n      - path: $.exit_code\n        equals: 1\n",
-        ta()
+        da()
     )
 }
 
@@ -156,7 +156,7 @@ fn vars_files_override_the_case_and_each_other_in_order() {
     let third = dir.write("passing-two.yaml", &passing_case("Passing two"));
 
     // The case's own value points at a file that does not exist, so the inner
-    // `ta` exits 3 and the outer assertion fails: exit 0 therefore proves that
+    // `da` exits 3 and the outer assertion fails: exit 0 therefore proves that
     // a later source overrode the case's value.
     let case = dir.write(
         "case.yaml",
@@ -173,11 +173,11 @@ steps:
       - path: $.exit_code
         equals: 0
 "#,
-            ta()
+            da()
         ),
     );
 
-    let from_case_only = run_ta_in(dir.path(), &["run", path_str(&case)]);
+    let from_case_only = run_da_in(dir.path(), &["run", path_str(&case)]);
     assert_eq!(
         exit_code(&from_case_only),
         Some(1),
@@ -186,7 +186,7 @@ steps:
     );
 
     let one_file = dir.write("one.yaml", &format!("target: {}\n", first.display()));
-    let from_file = run_ta_in(
+    let from_file = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--vars-file", path_str(&one_file)],
     );
@@ -198,7 +198,7 @@ steps:
     );
 
     let two_file = dir.write("two.yaml", &format!("target: {}\n", second.display()));
-    let from_two_files = run_ta_in(
+    let from_two_files = run_da_in(
         dir.path(),
         &[
             "run",
@@ -216,7 +216,7 @@ steps:
         stdout(&from_two_files)
     );
 
-    let from_var = run_ta_in(
+    let from_var = run_da_in(
         dir.path(),
         &[
             "run",
@@ -243,7 +243,7 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
     let dir = TempDir::new("vars-broken");
     let case = dir.write("passing.yaml", &passing_case("Passing"));
 
-    let missing = run_ta_in(
+    let missing = run_da_in(
         dir.path(),
         &[
             "run",
@@ -260,7 +260,7 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
     );
 
     // Lint reads the same files, so a broken one is a usage error there too.
-    let lint = run_ta_in(
+    let lint = run_da_in(
         dir.path(),
         &[
             "lint",
@@ -277,7 +277,7 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
     );
 
     let not_a_mapping = dir.write("list.yaml", "- one\n- two\n");
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &[
             "run",
@@ -294,7 +294,7 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
     );
 
     let wrong_type = dir.write("wrong.yaml", "token:\n  - one\n  - two\n");
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--vars-file", path_str(&wrong_type)],
     );
@@ -311,7 +311,7 @@ fn a_vars_file_that_cannot_be_used_exits_two_and_names_the_reason() {
     );
 
     let bad_grammar = dir.write("grammar.yaml", "token: [\n");
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &[
             "run",
@@ -342,13 +342,13 @@ steps:
       command: '{}'
       args: ["run", "${{target}}", "--no-bundle"]
 "#,
-            ta()
+            da()
         ),
     );
     let inner = dir.write("inner.yaml", &passing_case("Inner"));
     let vars = dir.write("vars.yaml", &format!("target: {}\n", inner.display()));
 
-    let without = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+    let without = run_da_in(dir.path(), &["lint", path_str(&case)]);
     assert_eq!(exit_code(&without), Some(3), "{}", stdout(&without));
     assert!(
         stdout(&without).contains("target"),
@@ -356,7 +356,7 @@ steps:
         stdout(&without)
     );
 
-    let with = run_ta_in(
+    let with = run_da_in(
         dir.path(),
         &["lint", path_str(&case), "--vars-file", path_str(&vars)],
     );
@@ -373,29 +373,29 @@ fn env_references_work_in_step_arguments_and_in_variable_values() {
             r#"
 name: Environment references
 vars:
-  from_vars: "${{env:TA_TEST_VARS_ENV}}"
+  from_vars: "${{env:DA_TEST_VARS_ENV}}"
 steps:
   - cli.run:
-      command: '{ta}'
+      command: '{da}'
       args: ["run", "missing-${{from_vars}}.yaml", "--no-bundle"]
     expect:
       - path: $.stderr
         contains: "missing-alpha.yaml"
   - cli.run:
-      command: '{ta}'
-      args: ["run", "direct-${{env:TA_TEST_STEP_ENV}}.yaml", "--no-bundle"]
+      command: '{da}'
+      args: ["run", "direct-${{env:DA_TEST_STEP_ENV}}.yaml", "--no-bundle"]
     expect:
       - path: $.stderr
         contains: "direct-beta.yaml"
 "#,
-            ta = ta()
+            da = da()
         ),
     );
 
-    let output = run_ta_with_env(
+    let output = run_da_with_env(
         dir.path(),
         &["run", path_str(&case)],
-        &[("TA_TEST_VARS_ENV", "alpha"), ("TA_TEST_STEP_ENV", "beta")],
+        &[("DA_TEST_VARS_ENV", "alpha"), ("DA_TEST_STEP_ENV", "beta")],
     );
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
@@ -418,15 +418,15 @@ steps:
       - path: $.stderr
         contains: "missing-gamma.yaml"
 "#,
-            ta()
+            da()
         ),
     );
-    let vars = dir.write("vars.yaml", "target: \"${env:TA_TEST_FILE_ENV}\"\n");
+    let vars = dir.write("vars.yaml", "target: \"${env:DA_TEST_FILE_ENV}\"\n");
 
-    let output = run_ta_with_env(
+    let output = run_da_with_env(
         dir.path(),
         &["run", path_str(&case), "--vars-file", path_str(&vars)],
-        &[("TA_TEST_FILE_ENV", "gamma")],
+        &[("DA_TEST_FILE_ENV", "gamma")],
     );
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
@@ -444,16 +444,16 @@ name: Missing environment variable
 steps:
   - cli.run:
       command: '{}'
-      args: ["run", "missing-${{env:TA_TEST_UNSET_ENV}}.yaml", "--no-bundle"]
+      args: ["run", "missing-${{env:DA_TEST_UNSET_ENV}}.yaml", "--no-bundle"]
 "#,
-            ta()
+            da()
         ),
     );
 
-    let run = run_ta_without_env(dir.path(), &["run", path_str(&case)], "TA_TEST_UNSET_ENV");
+    let run = run_da_without_env(dir.path(), &["run", path_str(&case)], "DA_TEST_UNSET_ENV");
     assert_eq!(exit_code(&run), Some(3), "stdout: {:?}", stdout(&run));
     assert!(
-        stderr(&run).contains("TA_TEST_UNSET_ENV"),
+        stderr(&run).contains("DA_TEST_UNSET_ENV"),
         "the message must name the variable, got: {:?}",
         stderr(&run)
     );
@@ -463,19 +463,19 @@ steps:
         stderr(&run)
     );
 
-    let lint = run_ta_without_env(dir.path(), &["lint", path_str(&case)], "TA_TEST_UNSET_ENV");
+    let lint = run_da_without_env(dir.path(), &["lint", path_str(&case)], "DA_TEST_UNSET_ENV");
     assert_eq!(exit_code(&lint), Some(3), "stdout: {:?}", stdout(&lint));
     assert!(
-        stdout(&lint).contains("TA_TEST_UNSET_ENV"),
+        stdout(&lint).contains("DA_TEST_UNSET_ENV"),
         "lint must name the variable, got: {:?}",
         stdout(&lint)
     );
 
-    let vars = dir.write("vars.yaml", "target: \"${env:TA_TEST_UNSET_ENV}\"\n");
-    let from_vars_file = run_ta_without_env(
+    let vars = dir.write("vars.yaml", "target: \"${env:DA_TEST_UNSET_ENV}\"\n");
+    let from_vars_file = run_da_without_env(
         dir.path(),
         &["run", path_str(&case), "--vars-file", path_str(&vars)],
-        "TA_TEST_UNSET_ENV",
+        "DA_TEST_UNSET_ENV",
     );
     assert_eq!(
         exit_code(&from_vars_file),
@@ -484,7 +484,7 @@ steps:
         stderr(&from_vars_file)
     );
     assert!(
-        stderr(&from_vars_file).contains("TA_TEST_UNSET_ENV"),
+        stderr(&from_vars_file).contains("DA_TEST_UNSET_ENV"),
         "got: {:?}",
         stderr(&from_vars_file)
     );
@@ -502,19 +502,19 @@ name: Empty environment variable
 steps:
   - cli.run:
       command: '{}'
-      args: ["run", "missing${{env:TA_TEST_EMPTY_ENV}}.yaml", "--no-bundle"]
+      args: ["run", "missing${{env:DA_TEST_EMPTY_ENV}}.yaml", "--no-bundle"]
     expect:
       - path: $.stderr
         contains: "missing.yaml"
 "#,
-            ta()
+            da()
         ),
     );
 
-    let output = run_ta_with_env(
+    let output = run_da_with_env(
         dir.path(),
         &["run", path_str(&case)],
-        &[("TA_TEST_EMPTY_ENV", "")],
+        &[("DA_TEST_EMPTY_ENV", "")],
     );
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
@@ -525,16 +525,16 @@ steps:
 fn an_invalid_environment_variable_name_is_a_case_error() {
     let dir = TempDir::new("env-invalid");
 
-    for (label, reference) in [("empty", "${env:}"), ("bad", "${env:TA-BAD-NAME}")] {
+    for (label, reference) in [("empty", "${env:}"), ("bad", "${env:DA-BAD-NAME}")] {
         let case = dir.write(
             &format!("{label}.yaml"),
             &format!(
                 "name: Invalid reference\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\", \"{reference}\"]\n",
-                ta()
+                da()
             ),
         );
 
-        let output = run_ta_in(dir.path(), &["run", path_str(&case)]);
+        let output = run_da_in(dir.path(), &["run", path_str(&case)]);
         assert_eq!(
             exit_code(&output),
             Some(3),
@@ -562,11 +562,11 @@ steps:
       - path: $.stderr
         equals: "nothing"
 "#,
-            ta()
+            da()
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--var", "probe=visible-4242"],
     );
@@ -583,7 +583,7 @@ steps:
 /// message must not appear in any output channel or in any bundle file.
 ///
 /// The case prints the secret on a child process's standard output (an inner
-/// `ta` echoes it), puts it in request headers that the local server echoes
+/// `da` echoes it), puts it in request headers that the local server echoes
 /// back, reads a body with one number, one boolean and one null, and then
 /// fails, so a bundle is written. Three secrets are used: a distinctive string,
 /// a short one (`1`) that also occurs inside numbers, and a literal (`true`)
@@ -591,23 +591,23 @@ steps:
 #[test]
 #[cfg(all(feature = "cli", feature = "http"))]
 fn a_secret_from_the_environment_never_reaches_output_or_a_bundle() {
-    const SECRET: &str = "s3cr3t-TA-LEAK-4242";
-    const NAME: &str = "TA_TEST_LEAK_SECRET";
+    const SECRET: &str = "s3cr3t-DA-LEAK-4242";
+    const NAME: &str = "DA_TEST_LEAK_SECRET";
     const SHORT: &str = "1";
-    const SHORT_NAME: &str = "TA_TEST_LEAK_SHORT";
+    const SHORT_NAME: &str = "DA_TEST_LEAK_SHORT";
     const LITERAL: &str = "true";
-    const LITERAL_NAME: &str = "TA_TEST_LEAK_LITERAL";
+    const LITERAL_NAME: &str = "DA_TEST_LEAK_LITERAL";
 
     let server = support::TestServer::start();
     let dir = TempDir::new("leak-gate");
 
-    // The inner case makes an inner `ta` print the secret on its standard
+    // The inner case makes an inner `da` print the secret on its standard
     // output: the outer step's result therefore carries it.
     let inner = dir.write(
         "inner.yaml",
         &format!(
             "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"run\", \"missing-${{probe}}.yaml\", \"--no-bundle\"]\n",
-            ta()
+            da()
         ),
     );
     let case = dir.write(
@@ -617,7 +617,7 @@ fn a_secret_from_the_environment_never_reaches_output_or_a_bundle() {
 name: Leaks the token
 steps:
   - cli.run:
-      command: '{ta}'
+      command: '{da}'
       args: ["--output", "json", "run", '{inner}', "--var", "probe=${{env:{name}}}", "--no-bundle"]
   - http.request:
       url: {base}/scalars
@@ -628,7 +628,7 @@ steps:
       - path: $.body.headers.authorization
         equals: "Bearer nope"
 "#,
-            ta = ta(),
+            da = da(),
             inner = inner.display(),
             name = NAME,
             short = SHORT_NAME,
@@ -639,7 +639,7 @@ steps:
     let environment = [(NAME, SECRET), (SHORT_NAME, SHORT), (LITERAL_NAME, LITERAL)];
 
     let text_dir = dir.path().join("bundles-text");
-    let text = run_ta_with_env(
+    let text = run_da_with_env(
         dir.path(),
         &["run", path_str(&case), "--bundle-dir", path_str(&text_dir)],
         &environment,
@@ -647,7 +647,7 @@ steps:
     assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
 
     let json_dir = dir.path().join("bundles-json");
-    let json = run_ta_with_env(
+    let json = run_da_with_env(
         dir.path(),
         &[
             "--output",
@@ -728,8 +728,8 @@ steps:
 #[test]
 #[cfg(all(feature = "http", feature = "log"))]
 fn a_secret_written_into_an_observed_log_is_redacted_everywhere() {
-    const SECRET: &str = "s3cr3t-TA-LOG-5150";
-    const NAME: &str = "TA_TEST_LOG_SECRET";
+    const SECRET: &str = "s3cr3t-DA-LOG-5150";
+    const NAME: &str = "DA_TEST_LOG_SECRET";
 
     let server = support::TestServer::start();
     let dir = TempDir::new("leak-observed-log");
@@ -762,7 +762,7 @@ steps:
     let environment = [(NAME, SECRET)];
 
     let text_bundles = dir.path().join("bundles-text");
-    let text = run_ta_with_env(
+    let text = run_da_with_env(
         dir.path(),
         &[
             "run",
@@ -778,7 +778,7 @@ steps:
     // both runs observing the same increment.
     let _ = fs::remove_file(&log);
     let json_bundles = dir.path().join("bundles-json");
-    let json = run_ta_with_env(
+    let json = run_da_with_env(
         dir.path(),
         &[
             "--output",
@@ -851,7 +851,7 @@ steps:
 #[test]
 #[cfg(all(feature = "cli", feature = "log"))]
 fn a_path_shaped_secret_is_redacted_in_both_separator_forms() {
-    const NAME: &str = "TA_TEST_PATH_SECRET";
+    const NAME: &str = "DA_TEST_PATH_SECRET";
 
     let dir = TempDir::new("leak-path-secret");
     let target = dir.path().join("S3CR3T-DIR-8891");
@@ -870,16 +870,16 @@ observe:
       path: ${{env:{name}}}
 steps:
   - cli.run:
-      command: '{ta}'
+      command: '{da}'
       args: ["--version"]
 "#,
-            ta = ta(),
+            da = da(),
             name = NAME
         ),
     );
 
     let text_bundles = dir.path().join("bundles-text");
-    let text = run_ta_with_env(
+    let text = run_da_with_env(
         dir.path(),
         &[
             "run",
@@ -898,7 +898,7 @@ steps:
     );
 
     let json_bundles = dir.path().join("bundles-json");
-    let json = run_ta_with_env(
+    let json = run_da_with_env(
         dir.path(),
         &[
             "--output",
@@ -960,8 +960,8 @@ steps:
 #[test]
 #[cfg(feature = "http")]
 fn a_secret_never_appears_in_an_error_message() {
-    const SECRET: &str = "s3cr3t-TA-ERROR-7731";
-    const NAME: &str = "TA_TEST_ERROR_SECRET";
+    const SECRET: &str = "s3cr3t-DA-ERROR-7731";
+    const NAME: &str = "DA_TEST_ERROR_SECRET";
 
     let dir = TempDir::new("leak-error");
     let case = dir.write(
@@ -972,7 +972,7 @@ fn a_secret_never_appears_in_an_error_message() {
         ),
     );
 
-    let text = run_ta_with_env(dir.path(), &["run", path_str(&case)], &[(NAME, SECRET)]);
+    let text = run_da_with_env(dir.path(), &["run", path_str(&case)], &[(NAME, SECRET)]);
     assert_eq!(exit_code(&text), Some(3), "stdout: {:?}", stdout(&text));
     assert!(
         !stderr(&text).contains(SECRET),
@@ -985,7 +985,7 @@ fn a_secret_never_appears_in_an_error_message() {
         stderr(&text)
     );
 
-    let json = run_ta_with_env(
+    let json = run_da_with_env(
         dir.path(),
         &["--output", "json", "run", path_str(&case)],
         &[(NAME, SECRET)],

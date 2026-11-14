@@ -197,7 +197,7 @@ mod tests {
     impl TempDir {
         fn new(label: &str) -> Self {
             let path =
-                std::env::temp_dir().join(format!("ta-db-unit-{}-{label}", std::process::id()));
+                std::env::temp_dir().join(format!("da-db-unit-{}-{label}", std::process::id()));
             std::fs::create_dir_all(&path).expect("the temporary directory must be created");
             Self(path)
         }

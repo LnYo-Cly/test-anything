@@ -191,7 +191,7 @@ mod tests {
 
     fn fixture(label: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("ta-driver-log-{}-{label}", std::process::id()));
+            std::env::temp_dir().join(format!("da-driver-log-{}-{label}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
         dir

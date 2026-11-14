@@ -3,22 +3,22 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use test_anything::core::bundle::{self, FailureBundles};
-use test_anything::core::case::{self, CaseError, LoadedCase};
-use test_anything::core::events::EventBus;
-use test_anything::core::filter::Filters;
-use test_anything::core::output::{self, Format};
-use test_anything::core::registry::Registry;
-use test_anything::core::report::RunOutcome;
-use test_anything::core::runner;
-use test_anything::core::schema;
-use test_anything::core::secrets::Secrets;
-use test_anything::drivers;
-use test_anything::exit::ExitCode as TaExitCode;
+use do_anything::core::bundle::{self, FailureBundles};
+use do_anything::core::case::{self, CaseError, LoadedCase};
+use do_anything::core::events::EventBus;
+use do_anything::core::filter::Filters;
+use do_anything::core::output::{self, Format};
+use do_anything::core::registry::Registry;
+use do_anything::core::report::RunOutcome;
+use do_anything::core::runner;
+use do_anything::core::schema;
+use do_anything::core::secrets::Secrets;
+use do_anything::drivers;
+use do_anything::exit::ExitCode as DaExitCode;
 
 /// An agent-friendly, cross-layer testing tool.
 #[derive(Debug, Parser)]
-#[command(name = "ta", version, about)]
+#[command(name = "da", version, about)]
 struct Cli {
     /// How command results are reported.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
@@ -138,8 +138,8 @@ fn main() -> ExitCode {
     if let Err(message) =
         drivers::register(&mut registry).and_then(|()| drivers::register_observers(&mut registry))
     {
-        let _ = write_stderr(&format!("ta: internal error: {message}\n"));
-        return TaExitCode::Environment.into();
+        let _ = write_stderr(&format!("da: internal error: {message}\n"));
+        return DaExitCode::Environment.into();
     }
 
     match cli.command {
@@ -224,10 +224,10 @@ impl VarSources {
 /// Reports a problem with the command line without running anything.
 fn usage_error(message: &str) -> ExitCode {
     let _ = write_stderr(&format!("error: {message}\n"));
-    TaExitCode::Usage.into()
+    DaExitCode::Usage.into()
 }
 
-/// Everything one `ta run` asked for, as the command line stated it.
+/// Everything one `da run` asked for, as the command line stated it.
 struct RunOptions {
     paths: Vec<PathBuf>,
     sources: VarSources,
@@ -280,7 +280,7 @@ fn execute(registry: &Registry, options: &RunOptions, secrets: &mut Secrets) -> 
 
 /// Validates the cases without running them.
 ///
-/// It shares discovery, loading and [`runner::preflight`] with `ta run`, so the
+/// It shares discovery, loading and [`runner::preflight`] with `da run`, so the
 /// two commands cannot disagree about which cases are valid. Unlike a run, it
 /// keeps going after the first bad file and reports every problem at once.
 fn lint(
@@ -309,9 +309,9 @@ fn lint(
     let _ = write_stderr(&rendered.stderr);
 
     if report.is_ok() {
-        TaExitCode::Success.into()
+        DaExitCode::Success.into()
     } else {
-        TaExitCode::InvalidCase.into()
+        DaExitCode::InvalidCase.into()
     }
 }
 
@@ -321,7 +321,7 @@ fn print_schema(registry: &Registry, format: OutputFormat) -> ExitCode {
     let rendered = output::render_schema(&value, format.into());
     let _ = write_stdout(&rendered.stdout);
     let _ = write_stderr(&rendered.stderr);
-    TaExitCode::Success.into()
+    DaExitCode::Success.into()
 }
 
 /// The files a path list expands to and the cases that loaded from them.

@@ -381,7 +381,7 @@ fn projection(sql: &str, columns: &[String], unsupported: &[usize]) -> String {
     // end would otherwise swallow the closing parenthesis, and the query would
     // fail on the wrapper instead of running.
     format!(
-        "SELECT {} FROM (\n{}\n) AS ta_db_query",
+        "SELECT {} FROM (\n{}\n) AS da_db_query",
         names.join(", "),
         without_terminator(sql)
     )
@@ -636,7 +636,7 @@ mod tests {
 
         assert_eq!(
             wrapped,
-            "SELECT \"total\"::text AS \"total\", \"name\" FROM (\nSELECT total, name FROM orders\n) AS ta_db_query"
+            "SELECT \"total\"::text AS \"total\", \"name\" FROM (\nSELECT total, name FROM orders\n) AS da_db_query"
         );
     }
 

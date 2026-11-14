@@ -1,4 +1,4 @@
-//! End-to-end tests for case classification and `ta run` filters.
+//! End-to-end tests for case classification and `da run` filters.
 //!
 //! Every case here uses the `cli.run` step, so the whole target is gated on the
 //! `cli` feature: a build without that driver cannot accept any case, which is
@@ -15,24 +15,24 @@ use serde_json::Value;
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 /// A passing case that uses a registered step.
 fn passing_case(name: &str, classification: &str) -> String {
     format!(
         "name: {name}\n{classification}steps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-        ta()
+        da()
     )
 }
 
@@ -103,7 +103,7 @@ fn each_filter_option_selects_the_matching_cases() {
     ];
 
     for (option, value, expected) in cases {
-        let output = run_ta_in(
+        let output = run_da_in(
             work.path(),
             &[
                 "--output",
@@ -144,7 +144,7 @@ fn one_option_uses_or_and_different_options_use_and() {
         &passing_case("api regression", "layer: api\ntags: [regression]\n"),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "--output",
@@ -180,7 +180,7 @@ fn skip_tag_excludes_a_case_that_another_filter_selected() {
         &passing_case("slow", "layer: api\ntags: [smoke, slow]\n"),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "--output",
@@ -207,7 +207,7 @@ fn a_case_without_the_field_is_not_selected_by_that_field() {
     work.write("a.yaml", &passing_case("unclassified", ""));
     work.write("b.yaml", &passing_case("api", "layer: api\n"));
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "--output",
@@ -237,7 +237,7 @@ fn an_empty_selection_exits_two_and_lists_the_available_values() {
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "run",
@@ -263,7 +263,7 @@ fn an_empty_selection_exits_two_and_lists_the_available_values() {
         );
     }
 
-    let json = run_ta_in(
+    let json = run_da_in(
         work.path(),
         &[
             "--output",
@@ -298,7 +298,7 @@ fn a_filtered_out_invalid_case_still_exits_three() {
         "name: broken\nlayer: cli\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let unknown_step = run_ta_in(
+    let unknown_step = run_da_in(
         work.path(),
         &[
             "run",
@@ -330,7 +330,7 @@ fn a_filtered_out_invalid_case_still_exits_three() {
         "c-syntax.yaml",
         "name: unclosed\nlayer: cli\nsteps:\n  - cli.run: [\n",
     );
-    let syntax = run_ta_in(
+    let syntax = run_da_in(
         work.path(),
         &[
             "run",
@@ -372,7 +372,7 @@ fn duplicate_tags_and_empty_classification_values_exit_three() {
     ];
 
     for (file, expected) in cases {
-        let output = run_ta_in(
+        let output = run_da_in(
             work.path(),
             &["run", path_str(&work.path().join(file)), "--no-bundle"],
         );
@@ -404,7 +404,7 @@ fn json_output_carries_the_classification_of_each_selected_case() {
     work.write("b.yaml", &passing_case("plain", ""));
     let path = work.path().join("a.yaml");
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &["--output", "json", "run", path_str(&path), "--no-bundle"],
     );
@@ -424,7 +424,7 @@ fn a_plain_case_reports_null_classification_and_empty_tags() {
     let work = TempDir::new("filter-json-empty");
     work.write("plain.yaml", &passing_case("plain", ""));
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "--output",
@@ -451,12 +451,12 @@ fn a_failure_bundle_meta_json_carries_the_classification() {
         "failing.yaml",
         &format!(
             "name: failing\nproject: shop\nsuite: smoke\nlayer: cli\ntags: [smoke, fast]\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n    expect:\n      - path: $.exit_code\n        equals: 42\n",
-            ta()
+            da()
         ),
     );
     let root: PathBuf = work.path().join("failures");
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &[
             "--output",
@@ -499,7 +499,7 @@ fn lint_lists_the_classification_of_every_case() {
     );
     work.write("b.yaml", &passing_case("plain", ""));
 
-    let output = run_ta_in(
+    let output = run_da_in(
         work.path(),
         &["--output", "json", "lint", path_str(work.path())],
     );

@@ -1,4 +1,4 @@
-//! End-to-end tests that run the compiled `ta` binary.
+//! End-to-end tests that run the compiled `da` binary.
 
 mod support;
 
@@ -20,27 +20,27 @@ use support::TempDir;
 use support::{TestServer, closed_port};
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with an empty working directory of its own.
 ///
-/// A run that fails writes a failure bundle under `.ta/failures` in the current
+/// A run that fails writes a failure bundle under `.da/failures` in the current
 /// directory, so every run gets a directory that is removed with it instead of
 /// filling the checkout of whoever runs the tests.
-fn run_ta(args: &[&str]) -> Output {
+fn run_da(args: &[&str]) -> Output {
     let work = TempDir::new("cwd");
-    run_ta_in(work.path(), args)
+    run_da_in(work.path(), args)
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -66,7 +66,7 @@ fn json_stdout(output: &Output) -> Value {
 
 #[test]
 fn version_prints_the_package_version() {
-    let output = run_ta(&["--version"]);
+    let output = run_da(&["--version"]);
 
     assert_eq!(exit_code(&output), Some(0));
     let stdout = stdout(&output);
@@ -78,7 +78,7 @@ fn version_prints_the_package_version() {
 
 #[test]
 fn unknown_subcommand_is_a_usage_error() {
-    let output = run_ta(&["nosuch"]);
+    let output = run_da(&["nosuch"]);
 
     assert_eq!(exit_code(&output), Some(2));
 }
@@ -116,7 +116,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     let stdout = stdout(&output);
@@ -170,7 +170,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(1));
     let stdout = stdout(&output);
@@ -215,7 +215,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["--output", "json", "run", path_str(&case)]);
+    let output = run_da(&["--output", "json", "run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(1));
     let value = json_stdout(&output);
@@ -272,7 +272,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(4), "stderr: {:?}", stderr(&output));
     assert!(
@@ -301,7 +301,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(5), "stderr: {:?}", stderr(&output));
 }
@@ -314,7 +314,7 @@ fn an_unknown_field_exits_three_with_a_line_number() {
         "name: Broken case\nnaem: typo\nsteps:\n  - http.request:\n      url: http://127.0.0.1:1/health\n",
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let stderr = stderr(&output);
@@ -346,7 +346,7 @@ fn an_unregistered_step_exits_three() {
         "name: Unknown step\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let stderr = stderr(&output);
@@ -369,7 +369,7 @@ fn arguments_that_do_not_match_the_schema_exit_three() {
         "name: Bad arguments\nsteps:\n  - http.request:\n      metod: GET\n      url: http://127.0.0.1:1/health\n",
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let stderr = stderr(&output);
@@ -388,7 +388,7 @@ fn an_undefined_variable_exits_three() {
         "name: Undefined variable\nsteps:\n  - http.request:\n      url: http://127.0.0.1:${port}/health\n",
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(3));
     let stderr = stderr(&output);
@@ -415,7 +415,7 @@ fn an_invalid_case_prevents_every_other_case_from_running() {
         "name: Broken\nsteps:\n  - shell.run:\n      command: echo hi\n",
     );
 
-    let output = run_ta(&["run", path_str(dir.path())]);
+    let output = run_da(&["run", path_str(dir.path())]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -445,7 +445,7 @@ fn a_directory_is_scanned_recursively_in_path_order() {
     dir.write("nested/c.yml", &case("c"));
     dir.write("a.yaml", &case("a"));
 
-    let output = run_ta(&["--output", "json", "run", path_str(dir.path())]);
+    let output = run_da(&["--output", "json", "run", path_str(dir.path())]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     let value = json_stdout(&output);
@@ -491,7 +491,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["--output", "json", "run", path_str(dir.path())]);
+    let output = run_da(&["--output", "json", "run", path_str(dir.path())]);
 
     assert_eq!(exit_code(&output), Some(1), "stderr: {:?}", stderr(&output));
     let value = json_stdout(&output);
@@ -542,7 +542,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     assert!(
@@ -589,7 +589,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
     let requests = server.requests();
@@ -620,7 +620,7 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
@@ -646,14 +646,14 @@ steps:
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
 
 #[test]
 fn a_missing_case_file_exits_three() {
-    let output = run_ta(&["run", "does-not-exist.yaml"]);
+    let output = run_da(&["run", "does-not-exist.yaml"]);
 
     assert_eq!(exit_code(&output), Some(3));
     assert!(
@@ -680,7 +680,7 @@ fn a_closed_stdout_pipe_does_not_panic_and_keeps_the_run_exit_code() {
     let server = TestServer::start();
     let dir = TempDir::new("broken-stdout");
     // A failing assertion whose expected value is far larger than a pipe
-    // buffer, so `ta` is still writing when the reader closes the pipe.
+    // buffer, so `da` is still writing when the reader closes the pipe.
     let expected = "x".repeat(512 * 1024);
     let case = dir.write(
         "huge-expected.yaml",
@@ -698,18 +698,18 @@ steps:
         ),
     );
 
-    let mut child = Command::new(ta())
+    let mut child = Command::new(da())
         .current_dir(dir.path())
         .args(["run", path_str(&case)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to run the ta binary");
+        .expect("failed to run the da binary");
 
     close_after_first_read(child.stdout.take().expect("stdout must be piped"));
     let output = child
         .wait_with_output()
-        .expect("failed to wait for the ta binary");
+        .expect("failed to wait for the da binary");
 
     let stderr = stderr(&output);
     assert_eq!(
@@ -720,7 +720,7 @@ steps:
     );
     assert!(
         !stderr.contains("panicked"),
-        "ta panicked instead of ending quietly: {stderr:?}"
+        "da panicked instead of ending quietly: {stderr:?}"
     );
 }
 
@@ -746,18 +746,18 @@ steps:
         ),
     );
 
-    let mut child = Command::new(ta())
+    let mut child = Command::new(da())
         .current_dir(dir.path())
         .args(["run", path_str(&case)])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("failed to run the ta binary");
+        .expect("failed to run the da binary");
 
     close_after_first_read(child.stderr.take().expect("stderr must be piped"));
     let output = child
         .wait_with_output()
-        .expect("failed to wait for the ta binary");
+        .expect("failed to wait for the da binary");
 
     let stderr = stderr(&output);
     assert_eq!(
@@ -768,13 +768,13 @@ steps:
     );
     assert!(
         !stderr.contains("panicked"),
-        "ta panicked instead of ending quietly: {stderr:?}"
+        "da panicked instead of ending quietly: {stderr:?}"
     );
 }
 
-/// A case whose only step runs `ta --version` and expects the wrong exit code.
+/// A case whose only step runs `da --version` and expects the wrong exit code.
 ///
-/// The program under test is `ta` itself: the failure paths must not depend on
+/// The program under test is `da` itself: the failure paths must not depend on
 /// a system command such as `false` or `exit`, which differ across platforms.
 #[cfg(feature = "cli")]
 fn wrong_expectation_case(name: &str) -> String {
@@ -789,7 +789,7 @@ steps:
       - path: $.exit_code
         equals: 42
 "#,
-        ta()
+        da()
     )
 }
 
@@ -811,7 +811,7 @@ steps:
       - path: $.exit_code
         equals: 0
       - path: $.stdout
-        contains: "ta "
+        contains: "da "
       - path: $.stderr
         equals: ""
       - path: $.json
@@ -829,12 +829,12 @@ steps:
       - path: $.json
         exists: false
 "#,
-            ta(),
-            ta()
+            da(),
+            da()
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
@@ -847,7 +847,7 @@ fn a_cli_step_runs_in_the_requested_working_directory() {
         "inner.yaml",
         &format!(
             "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-            ta()
+            da()
         ),
     );
     let case = dir.write(
@@ -866,12 +866,12 @@ steps:
       - path: $.stdout
         contains: "PASS"
 "#,
-            ta(),
+            da(),
             dir.path().display()
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
@@ -888,7 +888,7 @@ fn reported_paths_use_forward_slashes_only() {
     let case = dir.write("failing.yaml", &wrong_expectation_case("Path separators"));
     let root = dir.path().join("failures");
 
-    let output = run_ta(&[
+    let output = run_da(&[
         "--output",
         "json",
         "run",
@@ -919,7 +919,7 @@ fn reported_paths_use_forward_slashes_only() {
         "the file must still name the case file, got: {file}"
     );
 
-    let text = run_ta(&["run", path_str(&case), "--bundle-dir", path_str(&root)]);
+    let text = run_da(&["run", path_str(&case), "--bundle-dir", path_str(&root)]);
     assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
     assert!(
         !stdout(&text).contains('\\'),
@@ -934,14 +934,14 @@ fn a_missing_program_exits_four_and_names_it() {
     let dir = TempDir::new("cli-missing");
     let case = dir.write(
         "missing.yaml",
-        "name: Missing program\nsteps:\n  - cli.run:\n      command: ta-no-such-program-4ba42\n",
+        "name: Missing program\nsteps:\n  - cli.run:\n      command: da-no-such-program-4ba42\n",
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(4), "stderr: {:?}", stderr(&output));
     assert!(
-        stdout(&output).contains("ta-no-such-program-4ba42"),
+        stdout(&output).contains("da-no-such-program-4ba42"),
         "the message must name the program, got: {:?}",
         stdout(&output)
     );
@@ -955,19 +955,19 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
         "unknown.yaml",
         &format!(
             "name: Unknown argument\nsteps:\n  - cli.run:\n      cmnd: '{}'\n      command: '{}'\n",
-            ta(),
-            ta()
+            da(),
+            da()
         ),
     );
     let zero = dir.write(
         "zero.yaml",
         &format!(
             "name: Zero timeout\nsteps:\n  - cli.run:\n      command: '{}'\n      timeout_ms: 0\n",
-            ta()
+            da()
         ),
     );
 
-    let unknown_output = run_ta(&["run", path_str(&unknown)]);
+    let unknown_output = run_da(&["run", path_str(&unknown)]);
     assert_eq!(exit_code(&unknown_output), Some(3));
     assert!(
         stderr(&unknown_output).contains("cmnd"),
@@ -975,7 +975,7 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
         stderr(&unknown_output)
     );
 
-    let zero_output = run_ta(&["run", path_str(&zero)]);
+    let zero_output = run_da(&["run", path_str(&zero)]);
     assert_eq!(exit_code(&zero_output), Some(3));
     assert!(
         stderr(&zero_output).contains("timeout_ms"),
@@ -987,7 +987,7 @@ fn a_cli_step_with_invalid_arguments_exits_three() {
 /// A `cli.run` that outlives its `timeout_ms` is a timeout, not a failure.
 ///
 /// The test asserts the reported timeout and that the step really waited for
-/// it. It deliberately has no upper bound: `ta` also starts a child process,
+/// it. It deliberately has no upper bound: `da` also starts a child process,
 /// writes a failure bundle and drains two pipes, and on a loaded machine those
 /// steps dominate the wall clock of the whole command. A ceiling measured on
 /// the whole process would fail whenever the machine is busy, not when the
@@ -998,7 +998,7 @@ fn a_cli_step_that_exceeds_its_timeout_exits_five() {
     const TIMEOUT_MS: u64 = 150;
     let server = TestServer::start();
     let dir = TempDir::new("cli-timeout");
-    // The child is `ta` itself, waiting on a local service that answers slowly.
+    // The child is `da` itself, waiting on a local service that answers slowly.
     let slow = dir.write(
         "slow.yaml",
         &format!(
@@ -1017,13 +1017,13 @@ steps:
       args: ["run", '{}']
       timeout_ms: {TIMEOUT_MS}
 "#,
-            ta(),
+            da(),
             slow.display()
         ),
     );
 
     let started = std::time::Instant::now();
-    let output = run_ta(&["--output", "json", "run", path_str(&case)]);
+    let output = run_da(&["--output", "json", "run", path_str(&case)]);
     let elapsed = started.elapsed();
 
     assert_eq!(exit_code(&output), Some(5), "stderr: {:?}", stderr(&output));
@@ -1043,7 +1043,7 @@ steps:
         "the message must name the timeout that expired, got: {message}"
     );
     assert!(
-        message.contains(ta()),
+        message.contains(da()),
         "the message must name the program that was killed, got: {message}"
     );
     // The timeout cannot fire sooner than the limit it measures, so this lower
@@ -1074,7 +1074,7 @@ steps:
       - path: $.stdout
         equals: "{expected}"
 "#,
-            ta()
+            da()
         ),
     );
     let case = dir.write(
@@ -1094,12 +1094,12 @@ steps:
       - path: $.stderr
         equals: ""
 "#,
-            ta(),
+            da(),
             inner.display()
         ),
     );
 
-    let output = run_ta(&["run", path_str(&case)]);
+    let output = run_da(&["run", path_str(&case)]);
 
     assert_eq!(exit_code(&output), Some(0), "stderr: {:?}", stderr(&output));
 }
@@ -1111,7 +1111,7 @@ fn a_failing_case_writes_a_complete_bundle() {
     let case = dir.write("failing.yaml", &wrong_expectation_case("Wrong exit code"));
     let root = dir.path().join("failures");
 
-    let output = run_ta(&[
+    let output = run_da(&[
         "--output",
         "json",
         "run",
@@ -1143,7 +1143,7 @@ fn a_failing_case_writes_a_complete_bundle() {
     )
     .expect("meta.json must be JSON");
     assert_eq!(meta["schema_version"], 1);
-    assert_eq!(meta["ta_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(meta["da_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(meta["case_name"], "Wrong exit code");
     assert_eq!(meta["status"], "failed");
     assert!(
@@ -1192,12 +1192,12 @@ fn a_passing_run_creates_no_bundle_directory() {
         "passing.yaml",
         &format!(
             "name: Passing\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-            ta()
+            da()
         ),
     );
     let root = dir.path().join("failures");
 
-    let output = run_ta(&[
+    let output = run_da(&[
         "--output",
         "json",
         "run",
@@ -1221,14 +1221,14 @@ fn no_bundle_turns_the_failure_bundle_off() {
     let dir = TempDir::new("bundle-off");
     let case = dir.write("failing.yaml", &wrong_expectation_case("No bundle"));
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &["--output", "json", "run", path_str(&case), "--no-bundle"],
     );
 
     assert_eq!(exit_code(&output), Some(1), "stderr: {:?}", stderr(&output));
     assert!(
-        !dir.path().join(".ta").exists(),
+        !dir.path().join(".da").exists(),
         "the default bundle directory must not be created"
     );
     let value = json_stdout(&output);
@@ -1244,7 +1244,7 @@ fn a_bundle_that_cannot_be_written_keeps_the_exit_code_and_is_reported() {
     let blocked = dir.path().join("blocked");
     fs::write(&blocked, "not a directory").expect("the fixture file must be written");
 
-    let output = run_ta(&[
+    let output = run_da(&[
         "--output",
         "json",
         "run",
@@ -1282,7 +1282,7 @@ fn var_overrides_a_variable_from_the_case_file() {
         "inner.yaml",
         &format!(
             "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-            ta()
+            da()
         ),
     );
     let case = dir.write(
@@ -1300,11 +1300,11 @@ steps:
       - path: $.exit_code
         equals: 0
 "#,
-            ta()
+            da()
         ),
     );
 
-    let without = run_ta(&["run", path_str(&case)]);
+    let without = run_da(&["run", path_str(&case)]);
     assert_eq!(
         exit_code(&without),
         Some(1),
@@ -1312,7 +1312,7 @@ steps:
         stdout(&without)
     );
 
-    let with = run_ta(&[
+    let with = run_da(&[
         "run",
         path_str(&case),
         "--var",
@@ -1329,7 +1329,7 @@ fn var_can_define_a_variable_the_case_file_does_not() {
         "inner.yaml",
         &format!(
             "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-            ta()
+            da()
         ),
     );
     let case = dir.write(
@@ -1345,11 +1345,11 @@ steps:
       - path: $.exit_code
         equals: 0
 "#,
-            ta()
+            da()
         ),
     );
 
-    let without = run_ta(&["run", path_str(&case)]);
+    let without = run_da(&["run", path_str(&case)]);
     assert_eq!(exit_code(&without), Some(3));
     assert!(
         stderr(&without).contains("target"),
@@ -1357,7 +1357,7 @@ steps:
         stderr(&without)
     );
 
-    let with = run_ta(&[
+    let with = run_da(&[
         "run",
         path_str(&case),
         "--var",
@@ -1374,11 +1374,11 @@ fn a_malformed_var_exits_two_with_the_expected_form() {
         "passing.yaml",
         &format!(
             "name: Passing\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-            ta()
+            da()
         ),
     );
 
-    let missing_equals = run_ta(&["run", path_str(&case), "--var", "novalue"]);
+    let missing_equals = run_da(&["run", path_str(&case), "--var", "novalue"]);
     assert_eq!(exit_code(&missing_equals), Some(2));
     assert!(
         stderr(&missing_equals).contains("--var name=value"),
@@ -1386,7 +1386,7 @@ fn a_malformed_var_exits_two_with_the_expected_form() {
         stderr(&missing_equals)
     );
 
-    let empty_name = run_ta(&["run", path_str(&case), "--var", "=value"]);
+    let empty_name = run_da(&["run", path_str(&case), "--var", "=value"]);
     assert_eq!(exit_code(&empty_name), Some(2));
     assert!(
         stderr(&empty_name).contains("--var name=value"),

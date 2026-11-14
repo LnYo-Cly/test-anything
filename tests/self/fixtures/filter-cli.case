@@ -5,7 +5,7 @@ layer: cli
 tags: [smoke]
 steps:
   - cli.run:
-      command: ${ta}
+      command: ${da}
       args: ["--version"]
     expect:
       - path: $.exit_code

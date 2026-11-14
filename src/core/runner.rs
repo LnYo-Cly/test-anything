@@ -201,7 +201,7 @@ fn run_one(
 
 /// Checks everything that must hold before any case runs.
 ///
-/// `ta lint` calls the same function, so a case that lint accepts is a case
+/// `da lint` calls the same function, so a case that lint accepts is a case
 /// the runner would not reject. Validation does not execute a step.
 pub fn preflight(
     cases: &[LoadedCase],
@@ -1113,7 +1113,7 @@ mod tests {
 
     #[test]
     fn only_the_failing_case_gets_a_bundle() {
-        let dir = std::env::temp_dir().join(format!("ta-runner-bundle-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("da-runner-bundle-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
         let source = dir.join("failing.yaml");
@@ -1413,7 +1413,7 @@ mod tests {
     #[test]
     fn every_failing_case_of_a_parallel_run_gets_its_own_complete_bundle() {
         let dir =
-            std::env::temp_dir().join(format!("ta-runner-parallel-bundles-{}", std::process::id()));
+            std::env::temp_dir().join(format!("da-runner-parallel-bundles-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("the fixture directory must be created");
 

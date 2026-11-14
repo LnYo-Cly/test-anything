@@ -1,4 +1,4 @@
-//! Runs the self-test suite: `ta` testing `ta`.
+//! Runs the self-test suite: `da` testing `da`.
 //!
 //! `tests/self/*.yaml` are ordinary case files whose steps start the built
 //! binary. This test is the only place they run from, so `cargo test` covers
@@ -49,22 +49,22 @@ fn suite_cases() -> Vec<PathBuf> {
 #[cfg(feature = "cli")]
 #[test]
 fn the_self_suite_passes() {
-    let ta = env!("CARGO_BIN_EXE_ta");
+    let da = env!("CARGO_BIN_EXE_da");
     let work = TempDir::new("self-suite");
     let bundles = work.path().join("failures");
 
-    let mut command = Command::new(ta);
+    let mut command = Command::new(da);
     command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("run")
         .args(suite_cases())
         .args([
             "--var",
-            &format!("ta={ta}"),
+            &format!("da={da}"),
             "--var",
             &format!("bundles={}", bundles.display()),
         ]);
-    let output = command.output().expect("failed to run the ta binary");
+    let output = command.output().expect("failed to run the da binary");
 
     assert!(
         output.status.success(),
@@ -87,7 +87,7 @@ fn the_self_suite_passes() {
     )
     .expect("meta.json must be JSON");
     assert_eq!(meta["schema_version"], 1);
-    assert_eq!(meta["ta_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(meta["da_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(meta["case_name"], "Failing fixture");
     assert_eq!(meta["status"], "failed");
     assert!(

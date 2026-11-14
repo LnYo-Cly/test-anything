@@ -34,7 +34,7 @@ pub fn case_schema(registry: &Registry) -> Value {
 
     // An empty `oneOf` is not a valid schema, and a build without registered
     // steps must still produce a legal document. `false` accepts no step,
-    // which is exactly what `ta run` does with no driver.
+    // which is exactly what `da run` does with no driver.
     let step_items = if branches.is_empty() {
         Value::Bool(false)
     } else {
@@ -60,7 +60,7 @@ pub fn case_schema(registry: &Registry) -> Value {
 
     json!({
         "$schema": crate::CASE_SCHEMA_DIALECT,
-        "title": "ta case file",
+        "title": "da case file",
         "description": "A declarative test case: a name, optional classification, optional variables, optional observations and an ordered list of steps.",
         "type": "object",
         "additionalProperties": false,

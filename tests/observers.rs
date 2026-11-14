@@ -22,17 +22,17 @@ use serde_json::Value;
 use support::{TempDir, TestServer};
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -123,8 +123,8 @@ fn only_the_lines_a_step_added_are_observed() {
         ),
     );
 
-    let var = format!("ta={}", ta());
-    let output = run_ta_in(
+    let var = format!("da={}", da());
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--no-bundle", "--var", &var],
     );
@@ -160,8 +160,8 @@ fn a_log_file_that_does_not_exist_yields_an_empty_observation() {
         ),
     );
 
-    let var = format!("ta={}", ta());
-    let output = run_ta_in(
+    let var = format!("da={}", da());
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--no-bundle", "--var", &var],
     );
@@ -202,8 +202,8 @@ fn a_truncated_log_is_read_from_the_start_and_marked() {
         ),
     );
 
-    let var = format!("ta={}", ta());
-    let output = run_ta_in(
+    let var = format!("da={}", da());
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--no-bundle", "--var", &var],
     );
@@ -238,7 +238,7 @@ fn a_log_larger_than_one_mebibyte_is_cut_off_and_marked() {
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &["--output", "json", "run", path_str(&case), "--no-bundle"],
     );
@@ -282,7 +282,7 @@ fn a_failed_assertion_on_observed_values_reports_and_bundles_them() {
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &[
             "--output",
@@ -360,7 +360,7 @@ fn two_parallel_cases_do_not_see_each_others_lines() {
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &[
             "--output",
@@ -397,12 +397,12 @@ observe:
       path: app.log
 steps:
   - cli.run:
-      command: ta
+      command: da
       args: ["--version"]
 "#,
     );
 
-    let run = run_ta_in(dir.path(), &["run", path_str(&case)]);
+    let run = run_da_in(dir.path(), &["run", path_str(&case)]);
     assert_eq!(
         exit_code(&run),
         Some(3),
@@ -421,7 +421,7 @@ steps:
         "the message must list the registered observers, got: {message}"
     );
 
-    let lint = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+    let lint = run_da_in(dir.path(), &["lint", path_str(&case)]);
     assert_eq!(exit_code(&lint), Some(3), "stdout: {:?}", stdout(&lint));
     let message = stdout(&lint);
     assert!(message.contains("log.fil"), "got: {message}");
@@ -439,10 +439,10 @@ fn a_null_observe_block_is_a_case_error_with_a_position() {
     // must refuse it too instead of reading it as "no observations".
     let case = dir.write(
         "case.yaml",
-        "name: Null observer\nobserve:\nsteps:\n  - cli.run:\n      command: ta\n      args: [\"--version\"]\n",
+        "name: Null observer\nobserve:\nsteps:\n  - cli.run:\n      command: da\n      args: [\"--version\"]\n",
     );
 
-    let run = run_ta_in(dir.path(), &["run", path_str(&case)]);
+    let run = run_da_in(dir.path(), &["run", path_str(&case)]);
     assert_eq!(
         exit_code(&run),
         Some(3),
@@ -458,7 +458,7 @@ fn a_null_observe_block_is_a_case_error_with_a_position() {
         "a null observe block must name its position, got: {message}"
     );
 
-    let lint = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+    let lint = run_da_in(dir.path(), &["lint", path_str(&case)]);
     assert_eq!(exit_code(&lint), Some(3), "stdout: {:?}", stdout(&lint));
     assert!(
         stdout(&lint).contains("found null"),
@@ -486,12 +486,12 @@ observe:
       path: two.log
 steps:
   - cli.run:
-      command: ta
+      command: da
       args: ["--version"]
 "#,
     );
 
-    let run = run_ta_in(dir.path(), &["run", path_str(&case)]);
+    let run = run_da_in(dir.path(), &["run", path_str(&case)]);
     assert_eq!(
         exit_code(&run),
         Some(3),
@@ -506,7 +506,7 @@ steps:
         "a duplicate name must name its position, got: {message}"
     );
 
-    let lint = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+    let lint = run_da_in(dir.path(), &["lint", path_str(&case)]);
     assert_eq!(exit_code(&lint), Some(3), "stdout: {:?}", stdout(&lint));
     assert!(stdout(&lint).contains("app_log"), "got: {}", stdout(&lint));
 }
@@ -535,13 +535,13 @@ observe:
       {args}
 steps:
   - cli.run:
-      command: ta
+      command: da
       args: ["--version"]
 "#
             ),
         );
 
-        let run = run_ta_in(dir.path(), &["run", path_str(&case)]);
+        let run = run_da_in(dir.path(), &["run", path_str(&case)]);
         assert_eq!(
             exit_code(&run),
             Some(3),
@@ -559,7 +559,7 @@ steps:
             "{label}: an argument error must name its position, got: {message}"
         );
 
-        let lint = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+        let lint = run_da_in(dir.path(), &["lint", path_str(&case)]);
         assert_eq!(
             exit_code(&lint),
             Some(3),
@@ -596,7 +596,7 @@ fn an_observer_that_cannot_read_is_an_environment_error() {
         ),
     );
 
-    let output = run_ta_in(
+    let output = run_da_in(
         dir.path(),
         &["--output", "json", "run", path_str(&case), "--no-bundle"],
     );
@@ -632,13 +632,13 @@ name: No observers
 observe: {}
 steps:
   - cli.run:
-      command: ${ta}
+      command: ${da}
       args: ["--version"]
 "#,
     );
 
-    let var = format!("ta={}", ta());
-    let output = run_ta_in(
+    let var = format!("da={}", da());
+    let output = run_da_in(
         dir.path(),
         &["run", path_str(&case), "--no-bundle", "--var", &var],
     );

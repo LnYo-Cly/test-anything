@@ -1,6 +1,6 @@
-//! Process exit codes returned by `ta`.
+//! Process exit codes returned by `da`.
 
-/// Process exit codes returned by `ta`.
+/// Process exit codes returned by `da`.
 ///
 /// The numeric values are part of the command-line contract: scripts and
 /// agents branch on them, so released values must not change.

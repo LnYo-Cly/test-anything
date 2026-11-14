@@ -26,7 +26,7 @@ const READ_CHUNK: usize = 8 * 1024;
 ///
 /// A process that outlived the child, for example a daemon it started, keeps
 /// the write end of the pipe open. Waiting for it without a bound would hang
-/// `ta`, so the output read so far is used instead.
+/// `da`, so the output read so far is used instead.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Registers the steps of this driver.
@@ -46,12 +46,12 @@ pub fn register(registry: &mut Registry) -> Result<(), String> {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct CliRunArgs {
-    /// Program name or path. A relative path is resolved against the working directory of `ta`.
+    /// Program name or path. A relative path is resolved against the working directory of `da`.
     command: String,
     /// Arguments passed to the program, one per entry. No shell is involved.
     #[serde(default)]
     args: Vec<String>,
-    /// Working directory of the program. Defaults to the working directory of `ta`.
+    /// Working directory of the program. Defaults to the working directory of `da`.
     #[serde(default)]
     cwd: Option<PathBuf>,
     /// Environment variables added to the inherited environment, replacing names already set.
@@ -120,7 +120,7 @@ fn execute(args: &CliRunArgs) -> Result<Value, StepError> {
     let stderr = child.stderr.take().map(StreamReader::spawn);
     if let (Some(input), Some(mut pipe)) = (&args.stdin, child.stdin.take()) {
         // The write must not block this thread: a program that never reads its
-        // input would otherwise keep `ta` waiting before it even starts the
+        // input would otherwise keep `da` waiting before it even starts the
         // timeout. The thread ends when the pipe closes.
         let input = input.clone().into_bytes();
         thread::spawn(move || {
@@ -193,7 +193,7 @@ fn spawn_error(command: &str, error: &std::io::Error) -> StepError {
 }
 
 /// Reads one pipe on its own thread, so a program that fills a pipe cannot
-/// block on it while `ta` is still waiting for the program to exit.
+/// block on it while `da` is still waiting for the program to exit.
 struct StreamReader {
     buffer: Arc<Mutex<Vec<u8>>>,
     done: Receiver<()>,
@@ -235,7 +235,7 @@ impl StreamReader {
             let _ = handle.join();
         }
         // A reader that is still blocked stays detached with its pipe. It owns
-        // nothing `ta` needs, and the process ends without it.
+        // nothing `da` needs, and the process ends without it.
         match self.buffer.lock() {
             Ok(buffer) => buffer.clone(),
             Err(_) => Vec::new(),
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn defaults_to_no_arguments_no_input_and_the_documented_timeout() {
-        let args = parse(&json!({"command": "ta"})).expect("the arguments must parse");
+        let args = parse(&json!({"command": "da"})).expect("the arguments must parse");
 
         assert!(args.args.is_empty());
         assert!(args.cwd.is_none());
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn rejects_an_unknown_argument() {
-        let error = validate(&json!({"command": "ta", "argv": ["--version"]}))
+        let error = validate(&json!({"command": "da", "argv": ["--version"]}))
             .expect_err("the arguments must be refused");
 
         assert!(error.contains("argv"), "got: {error}");
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn rejects_a_zero_timeout() {
-        let error = validate(&json!({"command": "ta", "timeout_ms": 0}))
+        let error = validate(&json!({"command": "da", "timeout_ms": 0}))
             .expect_err("the arguments must be refused");
 
         assert!(error.contains("timeout_ms"), "got: {error}");
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn a_program_that_does_not_exist_is_an_environment_error_naming_it() {
         let error = run(
-            &json!({"command": "ta-no-such-program-for-a-test"}),
+            &json!({"command": "da-no-such-program-for-a-test"}),
             &mut Sessions::new(),
         )
         .expect_err("the step must fail");
@@ -293,7 +293,7 @@ mod tests {
             panic!("expected an environment error, got: {error:?}");
         };
         assert!(
-            message.contains("ta-no-such-program-for-a-test"),
+            message.contains("da-no-such-program-for-a-test"),
             "got: {message}"
         );
     }

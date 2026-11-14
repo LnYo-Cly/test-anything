@@ -1,12 +1,12 @@
 [package]
-name = "test-anything"
+name = "do-anything"
 version = "0.5.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
 
 [[bin]]
-name = "ta"
+name = "da"
 path = "src/main.rs"
 
 [features]

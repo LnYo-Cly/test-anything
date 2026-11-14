@@ -22,7 +22,7 @@ pub enum Format {
     Json,
 }
 
-/// The text `ta` writes to standard output and standard error.
+/// The text `da` writes to standard output and standard error.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rendered {
     /// Results.
@@ -31,7 +31,7 @@ pub struct Rendered {
     pub stderr: String,
 }
 
-/// What `ta lint` checked and what it found.
+/// What `da lint` checked and what it found.
 #[derive(Debug, Clone, Default)]
 pub struct LintReport {
     /// Number of case files the paths expanded to.
@@ -481,7 +481,7 @@ mod tests {
                     message: "1 of 1 assertions failed".to_string(),
                 }),
                 close_errors: Vec::new(),
-                bundle: Some(PathBuf::from(".ta/failures/17-42/0-Login")),
+                bundle: Some(PathBuf::from(".da/failures/17-42/0-Login")),
             }],
             filtered: 2,
             duration: Duration::from_millis(4),
@@ -507,7 +507,7 @@ mod tests {
         assert!(
             rendered
                 .stdout
-                .contains("  bundle: .ta/failures/17-42/0-Login"),
+                .contains("  bundle: .da/failures/17-42/0-Login"),
             "the bundle path belongs under the failed case, got: {}",
             rendered.stdout
         );
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(value["cases"][0]["layer"], "api");
         assert_eq!(value["cases"][0]["tags"], json!(["smoke"]));
         assert_eq!(value["cases"][0]["duration_ms"], 3);
-        assert_eq!(value["cases"][0]["bundle"], ".ta/failures/17-42/0-Login");
+        assert_eq!(value["cases"][0]["bundle"], ".da/failures/17-42/0-Login");
         assert_eq!(value["cases"][0]["steps"][0]["status"], "failed");
         assert_eq!(
             value["cases"][0]["steps"][0]["assertions"][0]["passed"],
@@ -555,7 +555,7 @@ mod tests {
             panic!("the fixture must be a completed run");
         };
         report.cases[0].file = PathBuf::from(r"G:\cases\login.yaml");
-        report.cases[0].bundle = Some(PathBuf::from(r"G:\cases\.ta\failures\1-0-Login"));
+        report.cases[0].bundle = Some(PathBuf::from(r"G:\cases\.da\failures\1-0-Login"));
         let outcome = RunOutcome::Completed(report);
 
         let json = render(&outcome, Format::Json, &Secrets::new());
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(value["cases"][0]["file"], "G:/cases/login.yaml");
         assert_eq!(
             value["cases"][0]["bundle"],
-            "G:/cases/.ta/failures/1-0-Login"
+            "G:/cases/.da/failures/1-0-Login"
         );
 
         let text = render(&outcome, Format::Text, &Secrets::new());

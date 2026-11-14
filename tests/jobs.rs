@@ -22,28 +22,28 @@ use serde_json::{Value, json};
 use support::TempDir;
 
 /// The binary under test, as an absolute path.
-fn ta() -> &'static str {
-    env!("CARGO_BIN_EXE_ta")
+fn da() -> &'static str {
+    env!("CARGO_BIN_EXE_da")
 }
 
 /// Runs the binary with `dir` as its working directory.
-fn run_ta_in(dir: &Path, args: &[&str]) -> Output {
-    Command::new(ta())
+fn run_da_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(da())
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("failed to run the ta binary")
+        .expect("failed to run the da binary")
 }
 
 /// Runs the binary with `dir` as its working directory and extra environment
 /// variables, which exist only in the child process.
-fn run_ta_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
-    let mut command = Command::new(ta());
+fn run_da_with_env(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(da());
     command.current_dir(dir).args(args);
     for (name, value) in envs {
         command.env(name, value);
     }
-    command.output().expect("failed to run the ta binary")
+    command.output().expect("failed to run the da binary")
 }
 
 fn exit_code(output: &Output) -> Option<i32> {
@@ -76,7 +76,7 @@ fn json_stdout(output: &Output) -> Value {
 fn passing_case(name: &str) -> String {
     format!(
         "name: {name}\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n",
-        ta()
+        da()
     )
 }
 
@@ -84,7 +84,7 @@ fn passing_case(name: &str) -> String {
 fn failing_case(name: &str) -> String {
     format!(
         "name: {name}\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"--version\"]\n    expect:\n      - path: $.exit_code\n        equals: 1\n",
-        ta()
+        da()
     )
 }
 
@@ -94,7 +94,7 @@ fn failing_case(name: &str) -> String {
 /// instead of a failed assertion, and the run's exit code is 4.
 fn error_case(name: &str) -> String {
     format!(
-        "name: {name}\nsteps:\n  - cli.run:\n      command: 'ta-no-such-program-4242'\n      timeout_ms: 5000\n"
+        "name: {name}\nsteps:\n  - cli.run:\n      command: 'da-no-such-program-4242'\n      timeout_ms: 5000\n"
     )
 }
 
@@ -208,7 +208,7 @@ fn a_job_count_below_one_or_not_a_number_exits_two() {
         ("", true),
         ("-1", false),
     ] {
-        let output = run_ta_in(dir.path(), &["run", path_str(&case), "--jobs", value]);
+        let output = run_da_in(dir.path(), &["run", path_str(&case), "--jobs", value]);
         assert_eq!(
             exit_code(&output),
             Some(2),
@@ -231,15 +231,15 @@ fn a_job_count_below_one_or_not_a_number_exits_two() {
     }
 
     // `--jobs` belongs to `run` only.
-    let lint = run_ta_in(dir.path(), &["lint", path_str(&case), "--jobs", "2"]);
+    let lint = run_da_in(dir.path(), &["lint", path_str(&case), "--jobs", "2"]);
     assert_eq!(
         exit_code(&lint),
         Some(2),
-        "`ta lint --jobs` must be a usage error, stderr: {:?}",
+        "`da lint --jobs` must be a usage error, stderr: {:?}",
         stderr(&lint)
     );
 
-    let accepted = run_ta_in(dir.path(), &["run", path_str(&case), "--jobs", "2"]);
+    let accepted = run_da_in(dir.path(), &["run", path_str(&case), "--jobs", "2"]);
     assert_eq!(
         exit_code(&accepted),
         Some(0),
@@ -255,11 +255,11 @@ fn the_default_is_one_job() {
     dir.write("cases/a-passes.yaml", &passing_case("A passes"));
     dir.write("cases/b-fails.yaml", &failing_case("B fails"));
 
-    let without = run_ta_in(
+    let without = run_da_in(
         dir.path(),
         &["--output", "json", "run", "cases", "--no-bundle"],
     );
-    let one = run_ta_in(
+    let one = run_da_in(
         dir.path(),
         &[
             "--output",
@@ -293,7 +293,7 @@ fn jobs_four_and_jobs_one_report_the_same_result() {
     let serial_bundles = dir.path().join("bundles-one");
     let parallel_bundles = dir.path().join("bundles-four");
 
-    let serial = run_ta_in(
+    let serial = run_da_in(
         dir.path(),
         &[
             "--output",
@@ -306,7 +306,7 @@ fn jobs_four_and_jobs_one_report_the_same_result() {
             path_str(&serial_bundles),
         ],
     );
-    let parallel = run_ta_in(
+    let parallel = run_da_in(
         dir.path(),
         &[
             "--output",
@@ -399,7 +399,7 @@ fn jobs_four_and_jobs_one_report_the_same_result() {
 fn jobs_four_finishes_much_sooner_than_jobs_one() {
     let server = support::TestServer::start();
     let dir = TempDir::new("jobs-timing");
-    // The child is `ta` itself, waiting on a local service that answers slowly.
+    // The child is `da` itself, waiting on a local service that answers slowly.
     dir.write(
         "cases/slow.case",
         &format!(
@@ -415,23 +415,23 @@ fn jobs_four_finishes_much_sooner_than_jobs_one() {
 name: Sleeps {name}
 steps:
   - cli.run:
-      command: '{ta}'
+      command: '{da}'
       args: ["run", "cases/slow.case", "--no-bundle"]
     expect:
       - path: $.exit_code
         equals: 0
 "#,
-                ta = ta()
+                da = da()
             ),
         );
     }
 
     let started = std::time::Instant::now();
-    let serial = run_ta_in(dir.path(), &["run", "cases", "--jobs", "1"]);
+    let serial = run_da_in(dir.path(), &["run", "cases", "--jobs", "1"]);
     let serial_elapsed = started.elapsed();
 
     let started = std::time::Instant::now();
-    let parallel = run_ta_in(dir.path(), &["run", "cases", "--jobs", "4"]);
+    let parallel = run_da_in(dir.path(), &["run", "cases", "--jobs", "4"]);
     let parallel_elapsed = started.elapsed();
 
     assert_eq!(
@@ -468,8 +468,8 @@ steps:
 #[test]
 #[cfg(all(feature = "cli", feature = "http"))]
 fn secrets_stay_redacted_when_cases_run_at_the_same_time() {
-    const SECRET: &str = "s3cr3t-TA-JOBS-9191";
-    const NAME: &str = "TA_TEST_JOBS_SECRET";
+    const SECRET: &str = "s3cr3t-DA-JOBS-9191";
+    const NAME: &str = "DA_TEST_JOBS_SECRET";
 
     let server = support::TestServer::start();
     let dir = TempDir::new("jobs-secrets");
@@ -477,7 +477,7 @@ fn secrets_stay_redacted_when_cases_run_at_the_same_time() {
         "inner.yaml",
         &format!(
             "name: Inner\nsteps:\n  - cli.run:\n      command: '{}'\n      args: [\"run\", \"missing-${{probe}}.yaml\", \"--no-bundle\"]\n",
-            ta()
+            da()
         ),
     );
     for case in 0..3 {
@@ -488,7 +488,7 @@ fn secrets_stay_redacted_when_cases_run_at_the_same_time() {
 name: Leaks the token {case}
 steps:
   - cli.run:
-      command: '{ta}'
+      command: '{da}'
       args: ["--output", "json", "run", '{inner}', "--var", "probe=${{env:{name}}}", "--no-bundle"]
   - http.request:
       url: {base}/echo
@@ -497,7 +497,7 @@ steps:
       - path: $.body.headers.authorization
         equals: "Bearer nope"
 "#,
-                ta = ta(),
+                da = da(),
                 inner = inner.display(),
                 name = NAME,
                 base = server.url("")
@@ -507,7 +507,7 @@ steps:
     let environment = [(NAME, SECRET)];
 
     let text_bundles = dir.path().join("bundles-text");
-    let text = run_ta_with_env(
+    let text = run_da_with_env(
         dir.path(),
         &[
             "run",
@@ -522,7 +522,7 @@ steps:
     assert_eq!(exit_code(&text), Some(1), "stderr: {:?}", stderr(&text));
 
     let json_bundles = dir.path().join("bundles-json");
-    let json = run_ta_with_env(
+    let json = run_da_with_env(
         dir.path(),
         &[
             "--output",

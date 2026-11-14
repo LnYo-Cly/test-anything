@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// Returns `path` with `/` as the only separator.
 ///
-/// Forward slashes are accepted by every platform `ta` runs on, and they need
+/// Forward slashes are accepted by every platform `da` runs on, and they need
 /// no escaping in JSON, in a shell argument or in a Markdown file.
 pub fn display(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
