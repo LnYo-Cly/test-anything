@@ -18,6 +18,34 @@ use serde_json::Value;
 #[cfg(feature = "cli")]
 use support::TempDir;
 
+/// The self-suite cases this build can run.
+///
+/// The observation case declares `log.file`, which a build without the `log`
+/// feature does not have. A case that declares an observation is validated even
+/// when a filter excludes it, so it is left out of the list instead of filtered
+/// out; every other case still runs.
+#[cfg(feature = "cli")]
+fn suite_cases() -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/self");
+    let mut cases: Vec<PathBuf> = fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("failed to list {}: {error}", dir.display()))
+        .map(|entry| entry.expect("failed to read a directory entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "yaml" || extension == "yml")
+        })
+        .collect();
+    cases.sort();
+    if !cfg!(feature = "log") {
+        cases.retain(|path| {
+            path.file_name()
+                .is_some_and(|name| name != "observe-log.yaml")
+        });
+    }
+    assert!(!cases.is_empty(), "the self suite must have cases");
+    cases
+}
+
 #[cfg(feature = "cli")]
 #[test]
 fn the_self_suite_passes() {
@@ -25,18 +53,18 @@ fn the_self_suite_passes() {
     let work = TempDir::new("self-suite");
     let bundles = work.path().join("failures");
 
-    let output = Command::new(ta)
+    let mut command = Command::new(ta);
+    command
         .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("run")
+        .args(suite_cases())
         .args([
-            "run",
-            "tests/self",
             "--var",
             &format!("ta={ta}"),
             "--var",
             &format!("bundles={}", bundles.display()),
-        ])
-        .output()
-        .expect("failed to run the ta binary");
+        ]);
+    let output = command.output().expect("failed to run the ta binary");
 
     assert!(
         output.status.success(),

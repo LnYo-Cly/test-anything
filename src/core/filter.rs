@@ -161,6 +161,7 @@ mod tests {
             suite: suite.map(str::to_string),
             layer: layer.map(str::to_string),
             tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            observe: Vec::new(),
             steps: Vec::new(),
         }
     }

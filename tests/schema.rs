@@ -308,6 +308,8 @@ fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition 
 fn built_in_registry() -> test_anything::core::registry::Registry {
     let mut registry = test_anything::core::registry::Registry::new();
     test_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
+    test_anything::drivers::register_observers(&mut registry)
+        .expect("the built-in observers must register");
     registry
 }
 
@@ -454,6 +456,174 @@ fn an_unknown_step_argument_is_rejected() {
     );
 }
 
+/// The `observe` block and the observers behind it, as `ta schema` describes
+/// them.
+#[cfg(all(feature = "log", feature = "cli"))]
+#[test]
+fn the_schema_describes_observe_and_every_registered_observer() {
+    let schema = schema();
+    let observe = &schema["properties"]["observe"];
+
+    assert_eq!(observe["type"], "object");
+    assert_eq!(
+        observe["propertyNames"]["pattern"], "^[a-z0-9._-]+$",
+        "the name becomes a key of `observed`, so the schema states the rule"
+    );
+    let branches = observe["additionalProperties"]["oneOf"]
+        .as_array()
+        .unwrap_or_else(|| panic!("registered observers must produce a oneOf, got: {observe}"));
+    assert!(
+        branches.iter().any(|branch| {
+            branch["additionalProperties"] == false
+                && branch["properties"]["log.file"]["$ref"] == "#/$defs/log.file"
+        }),
+        "`observe` must reference the observer definition, got: {branches:?}"
+    );
+    let definition = &schema["$defs"]["log.file"];
+    assert_eq!(definition["type"], "object");
+    assert_eq!(definition["properties"]["path"]["minLength"], 1);
+    assert!(
+        definition["description"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
+        "the observer definition must keep its description, got: {definition}"
+    );
+
+    let validator = validator(schema);
+    let valid = json!({
+        "name": "Observed",
+        "observe": {"app_log": {"log.file": {"path": "app.log"}}},
+        "steps": [{"cli.run": {"command": "ta"}}]
+    });
+    assert!(
+        validator.is_valid(&valid),
+        "a case that declares an observation must validate: {valid}"
+    );
+
+    for (label, observe, fragment) in [
+        (
+            "unknown observer",
+            json!({"app_log": {"log.fil": {"path": "app.log"}}}),
+            "log.fil",
+        ),
+        (
+            "two observers",
+            json!({"app_log": {"log.file": {"path": "a.log"}, "log.fil": {"path": "b.log"}}}),
+            "log.fil",
+        ),
+        (
+            "empty path",
+            json!({"app_log": {"log.file": {"path": ""}}}),
+            "path",
+        ),
+        (
+            "unknown argument",
+            json!({"app_log": {"log.file": {"path": "a.log", "location": "here"}}}),
+            "location",
+        ),
+        (
+            "name outside the rule",
+            json!({"App_log": {"log.file": {"path": "a.log"}}}),
+            "App_log",
+        ),
+    ] {
+        let mut instance = valid.clone();
+        instance["observe"] = observe;
+        let errors: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|error| error.to_string())
+            .collect();
+        assert!(
+            !errors.is_empty(),
+            "{label}: the schema must reject {instance}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains(fragment)),
+            "{label}: the error must mention `{fragment}`, got: {errors:?}"
+        );
+    }
+}
+
+/// The schema and `validate` agree on every bound an observer declares.
+///
+/// This is the same gate as [`every_declared_argument_bound_is_enforced_by_validate`],
+/// applied to the second kind of extension point the registry holds.
+#[cfg(all(feature = "log", any(feature = "cli", feature = "http")))]
+#[test]
+fn every_declared_observer_argument_bound_is_enforced_by_validate() {
+    let registry = built_in_registry();
+    let mut checked = 0;
+
+    for name in registry.observer_names() {
+        let definition = registry
+            .observer(name)
+            .expect("every listed observer must be registered");
+        let base = observer_arguments(name);
+        assert!(
+            (definition.validate)(&base).is_ok(),
+            "the base arguments for `{name}` must be valid: {base}"
+        );
+        assert!(
+            jsonschema::is_valid(&definition.args_schema, &base),
+            "the schema must accept the base arguments for `{name}`: {base}"
+        );
+        assert_eq!(
+            schema()["$defs"][name]["properties"],
+            definition.args_schema["properties"],
+            "`ta schema` must carry the observer's arguments"
+        );
+
+        let properties = definition.args_schema["properties"]
+            .as_object()
+            .unwrap_or_else(|| {
+                panic!(
+                    "`{name}` must declare its arguments as object properties: {}",
+                    definition.args_schema
+                )
+            });
+        for (argument, schema) in properties {
+            for (keyword, bound) in declared_bounds(schema) {
+                let (violating, allowed) = bound_values(keyword, &bound);
+
+                let mut args = base.clone();
+                args[argument] = violating;
+                assert!(
+                    !jsonschema::is_valid(&definition.args_schema, &args),
+                    "the test must build a value that violates `{keyword}` for `{argument}` of `{name}`: {args}"
+                );
+                assert!(
+                    (definition.validate)(&args).is_err(),
+                    "`{name}` declares `{keyword}: {bound}` for `{argument}`, but validate accepts {args}"
+                );
+
+                if let Some(allowed) = allowed {
+                    let mut args = base.clone();
+                    args[argument] = allowed;
+                    assert!(
+                        (definition.validate)(&args).is_ok(),
+                        "`{name}` declares `{keyword}: {bound}` for `{argument}`, but validate rejects {args}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "expected at least one bounded observer argument"
+    );
+}
+
+/// Arguments each built-in observer accepts, before one is overridden.
+#[cfg(all(feature = "log", any(feature = "cli", feature = "http")))]
+fn observer_arguments(observer: &str) -> Value {
+    match observer {
+        "log.file" => json!({"path": "app.log"}),
+        other => panic!("add the valid arguments of `{other}` to this test"),
+    }
+}
+
 #[cfg(feature = "cli")]
 #[test]
 fn the_schema_accepts_every_valid_repository_case() {
@@ -464,6 +634,11 @@ fn the_schema_accepts_every_valid_repository_case() {
         let text = fs::read_to_string(&file).expect("the self case must be readable");
         let instance: Value =
             serde_saphyr::from_str(&text).expect("the self case must be valid YAML");
+        // A build without the observer cannot describe a case that declares
+        // one; the case itself is still checked by every build that has it.
+        if instance.get("observe").is_some() && !describes_observations(schema()) {
+            continue;
+        }
         assert!(
             validator.is_valid(&instance),
             "the schema rejected the valid self case {}",
@@ -493,6 +668,12 @@ fn the_schema_accepts_every_valid_repository_case() {
     }
 }
 
+/// Whether this build can describe an observation at all.
+#[cfg(feature = "cli")]
+fn describes_observations(schema: &Value) -> bool {
+    schema["properties"]["observe"]["additionalProperties"] != Value::Bool(false)
+}
+
 #[cfg(all(feature = "http", feature = "cli"))]
 #[test]
 fn the_schema_accepts_every_case_example_in_the_docs() {
@@ -509,6 +690,11 @@ fn the_schema_accepts_every_case_example_in_the_docs() {
             );
             let instance: Value =
                 serde_saphyr::from_str(example).expect("the example must be valid YAML");
+            // A build without the observer cannot describe an example that
+            // declares one; every build that has the observer checks it.
+            if instance.get("observe").is_some() && !describes_observations(schema()) {
+                continue;
+            }
             assert!(
                 validator.is_valid(&instance),
                 "the schema rejected an example in {doc}:
@@ -558,13 +744,17 @@ fn the_schema_is_valid_when_no_step_is_registered() {
         Value::Bool(false),
         "without registered steps no step item can be valid"
     );
-    assert_eq!(
-        schema["$defs"]
-            .as_object()
-            .expect("$defs must be an object")
-            .len(),
-        2,
-        "a build without steps keeps only the shared assertion and save definitions"
+    let definitions = schema["$defs"]
+        .as_object()
+        .expect("$defs must be an object");
+    assert!(
+        definitions.contains_key("expect") && definitions.contains_key("save"),
+        "a build without steps keeps the shared assertion and save definitions"
+    );
+    assert!(
+        !definitions.contains_key("cli.run") && !definitions.contains_key("http.request"),
+        "a build without steps must not describe a step: {:?}",
+        definitions.keys().collect::<Vec<_>>()
     );
     jsonschema::meta::validate(schema).expect("the no-driver schema must be a valid schema");
 

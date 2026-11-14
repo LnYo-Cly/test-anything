@@ -10,6 +10,7 @@ pub mod bundle;
 pub mod case;
 pub mod events;
 pub mod filter;
+pub mod observer;
 pub mod output;
 pub mod paths;
 pub mod registry;

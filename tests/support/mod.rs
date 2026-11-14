@@ -232,6 +232,16 @@ fn route(
         // assert on how each JSON scalar is redacted without depending on a
         // duration or a timestamp.
         (_, "/scalars") => json_response("200 OK", r#"{"count":10,"flag":true,"nothing":null}"#),
+        // Writes a file while the request is answered, so a case can produce
+        // log lines during its own step: an observer sees only what changed
+        // between its start and its collect call.
+        ("POST", "/write-log") => match write_log(body) {
+            Ok(()) => json_response("200 OK", r#"{"written":true}"#),
+            Err(error) => json_response(
+                "500 Internal Server Error",
+                &serde_json::json!({"error": error}).to_string(),
+            ),
+        },
         (_, "/echo") => {
             let echo = serde_json::json!({
                 "method": method,
@@ -244,6 +254,37 @@ fn route(
         }
         _ => json_response("404 Not Found", r#"{"error":"not found"}"#),
     }
+}
+
+/// Appends to or rewrites the file named in a `/write-log` request body.
+///
+/// The body is a JSON object with `path` and `text`, plus `append` to add to
+/// the file instead of replacing it. A missing file is created.
+fn write_log(body: &str) -> Result<(), String> {
+    let request: serde_json::Value = serde_json::from_str(body)
+        .map_err(|error| format!("the body must be a JSON object: {error}"))?;
+    let path = request["path"]
+        .as_str()
+        .ok_or("`path` must be a string naming the file to write")?;
+    let text = request["text"]
+        .as_str()
+        .ok_or("`text` must be a string holding the content")?;
+    let append = request["append"].as_bool().unwrap_or(false);
+
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true);
+    if append {
+        options.append(true);
+    } else {
+        options.truncate(true);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("could not open {path}: {error}"))?;
+    file.write_all(text.as_bytes())
+        .map_err(|error| format!("could not write {path}: {error}"))?;
+    file.flush()
+        .map_err(|error| format!("could not flush {path}: {error}"))
 }
 
 fn json_response(status: &str, body: &str) -> String {
