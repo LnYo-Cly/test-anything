@@ -272,6 +272,7 @@ mod tests {
                 error: None,
             }],
             error: None,
+            close_errors: Vec::new(),
             bundle: None,
         }
     }

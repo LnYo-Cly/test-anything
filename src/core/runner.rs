@@ -20,6 +20,7 @@ use crate::core::report::{
     CaseReport, CaseStatus, Problem, ProblemKind, RunOutcome, RunReport, StepReport, StepStatus,
 };
 use crate::core::secrets::Secrets;
+use crate::core::session::Sessions;
 
 /// Validates every case, then runs the ones the filters select.
 ///
@@ -357,6 +358,9 @@ fn run_case(
 ) -> CaseReport {
     let started = Instant::now();
     let mut vars = loaded.case.vars.clone();
+    // One set of resources belongs to this case and to no other. It is created
+    // here, on the worker that runs the case, so `--jobs` cannot share it.
+    let mut sessions = Sessions::new();
     let mut steps = Vec::with_capacity(loaded.case.steps.len());
     // One observation per declared name belongs to this case and to no other,
     // so two cases that run at the same time never share what they collect.
@@ -394,7 +398,14 @@ fn run_case(
             error: None,
         };
 
-        match execute_step(step, registry, &mut vars, secrets, &mut observations) {
+        match execute_step(
+            step,
+            registry,
+            &mut vars,
+            secrets,
+            &mut observations,
+            &mut sessions,
+        ) {
             Ok((result, assertions)) => {
                 let failed = assertions.iter().filter(|item| !item.passed).count();
                 if failed == 0 {
@@ -429,11 +440,29 @@ fn run_case(
         steps.push(report);
     }
 
-    let status = match stopped.as_ref().map(|problem| problem.kind) {
+    // Every session belongs to this case and is closed here, whatever path the
+    // case took. `close_all` removes a session before closing it, so a failing
+    // close cannot be attempted twice.
+    let close_errors = sessions.close_all();
+
+    let mut status = match stopped.as_ref().map(|problem| problem.kind) {
         None => CaseStatus::Passed,
         Some(ProblemKind::Assertion) => CaseStatus::Failed,
         Some(_) => CaseStatus::Error,
     };
+    let mut error = stopped;
+    // A case that already failed or errored keeps its own verdict; the close
+    // errors are attached to the report without replacing the problem. A case
+    // that would otherwise pass becomes an environment error, because a
+    // resource that could not be released is an environment problem, not a
+    // test result.
+    if !close_errors.is_empty() && status == CaseStatus::Passed {
+        status = CaseStatus::Error;
+        error = Some(Problem {
+            kind: ProblemKind::Environment,
+            message: close_error_message(&close_errors),
+        });
+    }
 
     CaseReport {
         file: loaded.path.clone(),
@@ -445,9 +474,22 @@ fn run_case(
         status,
         duration: started.elapsed(),
         steps,
-        error: stopped,
+        error,
+        close_errors,
         bundle: None,
     }
+}
+
+/// The one problem a case reports when its sessions could not be closed.
+fn close_error_message(errors: &[String]) -> String {
+    if let [message] = errors {
+        return message.clone();
+    }
+    format!(
+        "{} sessions could not be closed: {}",
+        errors.len(),
+        errors.join("; ")
+    )
 }
 
 /// One declared observation, ready to start and collect around every step.
@@ -522,6 +564,7 @@ fn execute_step(
     vars: &mut BTreeMap<String, String>,
     secrets: &Mutex<&mut Secrets>,
     observations: &mut [ObservationSlot],
+    sessions: &mut Sessions,
 ) -> Result<(Value, Vec<AssertionReport>), Problem> {
     let definition = registry.get(&step.action).ok_or_else(|| Problem {
         kind: ProblemKind::InvalidInput,
@@ -546,11 +589,11 @@ fn execute_step(
     // change this one step made.
     for slot in observations.iter_mut() {
         slot.observer
-            .start()
+            .start(sessions)
             .map_err(|error| observer_problem(slot, &error))?;
     }
 
-    let result = (definition.run)(&args).map_err(problem_from_step_error)?;
+    let result = (definition.run)(&args, sessions).map_err(problem_from_step_error)?;
 
     // Collection happens before the assertions are evaluated: an `expect` entry
     // that names `$.observed.<name>` must see the values of this step.
@@ -559,7 +602,7 @@ fn execute_step(
         for slot in observations.iter_mut() {
             let value = slot
                 .observer
-                .collect()
+                .collect(sessions)
                 .map_err(|error| observer_problem(slot, &error))?;
             observed.insert(slot.name.clone(), value);
         }
@@ -701,11 +744,11 @@ mod tests {
     struct Echo(Value);
 
     impl Observer for Echo {
-        fn start(&mut self) -> Result<(), ObserverError> {
+        fn start(&mut self, _sessions: &mut Sessions) -> Result<(), ObserverError> {
             Ok(())
         }
 
-        fn collect(&mut self) -> Result<Value, ObserverError> {
+        fn collect(&mut self, _sessions: &mut Sessions) -> Result<Value, ObserverError> {
             Ok(self.0.clone())
         }
     }
@@ -714,11 +757,11 @@ mod tests {
     struct Broken;
 
     impl Observer for Broken {
-        fn start(&mut self) -> Result<(), ObserverError> {
+        fn start(&mut self, _sessions: &mut Sessions) -> Result<(), ObserverError> {
             Ok(())
         }
 
-        fn collect(&mut self) -> Result<Value, ObserverError> {
+        fn collect(&mut self, _sessions: &mut Sessions) -> Result<Value, ObserverError> {
             Err(ObserverError::Environment(
                 "could not read `app.log`".to_string(),
             ))
@@ -752,7 +795,9 @@ mod tests {
                         Err("invalid arguments: `value` is required".to_string())
                     }
                 },
-                run: |args: &Value| Ok(args.get("value").cloned().unwrap_or(Value::Null)),
+                run: |args: &Value, _sessions| {
+                    Ok(args.get("value").cloned().unwrap_or(Value::Null))
+                },
             })
             .expect("the test step must register");
         registry
@@ -761,7 +806,7 @@ mod tests {
                 description: "Fails the environment.",
                 args_schema: json!({"type": "object"}),
                 validate: |_| Ok(()),
-                run: |_| {
+                run: |_, _| {
                     Err(StepError::Environment(
                         "the target refused the connection".to_string(),
                     ))
@@ -774,7 +819,7 @@ mod tests {
                 description: "Waits `ms` milliseconds, then returns `value`.",
                 args_schema: json!({"type": "object"}),
                 validate: |_| Ok(()),
-                run: |args: &Value| {
+                run: |args: &Value, _sessions| {
                     let millis = args.get("ms").and_then(Value::as_u64).unwrap_or(0);
                     std::thread::sleep(Duration::from_millis(millis));
                     Ok(args.get("value").cloned().unwrap_or(Value::Null))
@@ -787,7 +832,7 @@ mod tests {
                 description: "Returns a number.",
                 args_schema: json!({"type": "object"}),
                 validate: |_| Ok(()),
-                run: |_| Ok(json!(5)),
+                run: |_, _| Ok(json!(5)),
             })
             .expect("the scalar test step must register");
         registry

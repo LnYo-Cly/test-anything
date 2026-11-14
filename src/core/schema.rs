@@ -262,7 +262,7 @@ mod tests {
                     "properties": {"value": {"type": "string"}}
                 }),
                 validate: |_| Ok(()),
-                run: |_| Ok(Value::Null),
+                run: |_, _| Ok(Value::Null),
             })
             .expect("the test step must register");
         registry
@@ -272,11 +272,17 @@ mod tests {
     struct Silent;
 
     impl Observer for Silent {
-        fn start(&mut self) -> Result<(), ObserverError> {
+        fn start(
+            &mut self,
+            _sessions: &mut crate::core::session::Sessions,
+        ) -> Result<(), ObserverError> {
             Ok(())
         }
 
-        fn collect(&mut self) -> Result<Value, ObserverError> {
+        fn collect(
+            &mut self,
+            _sessions: &mut crate::core::session::Sessions,
+        ) -> Result<Value, ObserverError> {
             Ok(Value::Null)
         }
     }

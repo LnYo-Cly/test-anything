@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use wait_timeout::ChildExt;
 
 use crate::core::registry::{Registry, StepDefinition, StepError};
+use crate::core::session::Sessions;
 
 /// Name of the step this module registers.
 pub const STEP_NAME: &str = "cli.run";
@@ -89,7 +90,7 @@ fn check(args: &CliRunArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn run(args: &Value) -> Result<Value, StepError> {
+fn run(args: &Value, _sessions: &mut Sessions) -> Result<Value, StepError> {
     let args = parse(args).map_err(StepError::InvalidArguments)?;
     check(&args).map_err(StepError::InvalidArguments)?;
     execute(&args)
@@ -282,8 +283,11 @@ mod tests {
 
     #[test]
     fn a_program_that_does_not_exist_is_an_environment_error_naming_it() {
-        let error = run(&json!({"command": "ta-no-such-program-for-a-test"}))
-            .expect_err("the step must fail");
+        let error = run(
+            &json!({"command": "ta-no-such-program-for-a-test"}),
+            &mut Sessions::new(),
+        )
+        .expect_err("the step must fail");
 
         let StepError::Environment(message) = error else {
             panic!("expected an environment error, got: {error:?}");

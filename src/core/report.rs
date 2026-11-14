@@ -133,6 +133,13 @@ pub struct CaseReport {
     pub steps: Vec<StepReport>,
     /// The problem that made the case fail, if any.
     pub error: Option<Problem>,
+    /// Sessions that could not be closed, in the order they were closed.
+    ///
+    /// A case that passed becomes an environment error when this list is not
+    /// empty. A case that already failed or errored keeps its own status and
+    /// problem; these messages are attached to the report without changing the
+    /// verdict.
+    pub close_errors: Vec<String>,
     /// Failure bundle directory, when one was written for this case.
     pub bundle: Option<PathBuf>,
 }
@@ -301,6 +308,7 @@ mod tests {
                     kind,
                     message: "problem".to_string(),
                 }),
+                close_errors: Vec::new(),
                 bundle: None,
             }],
             filtered: 0,

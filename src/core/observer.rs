@@ -13,6 +13,8 @@
 
 use serde_json::Value;
 
+use crate::core::session::Sessions;
+
 /// Why an observer could not do its work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ObserverError {
@@ -37,12 +39,17 @@ impl ObserverError {
 /// it. An implementation may keep whatever state it needs between the two
 /// calls, and that state belongs to one case only: cases that run at the same
 /// time never share an instance.
+///
+/// Both calls receive the case's [`Sessions`], so an observer can read a
+/// resource a step opened earlier in the same case. `start` runs before the
+/// step, so on the first step the session may not exist yet; `collect` runs
+/// after it, so that is where a resource opened by the step is available.
 pub trait Observer: Send {
     /// Starts observing the next step.
-    fn start(&mut self) -> Result<(), ObserverError>;
+    fn start(&mut self, sessions: &mut Sessions) -> Result<(), ObserverError>;
 
     /// Stops observing and returns what the step left behind.
-    fn collect(&mut self) -> Result<Value, ObserverError>;
+    fn collect(&mut self, sessions: &mut Sessions) -> Result<Value, ObserverError>;
 }
 
 /// An observer implementation and the contract it declares to the engine.
