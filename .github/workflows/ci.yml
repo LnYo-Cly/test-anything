@@ -37,7 +37,49 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Clippy (no default features)
         run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - name: Clippy (db only)
+        run: cargo clippy --all-targets --no-default-features --features db -- -D warnings
+      - name: Clippy (log only)
+        run: cargo clippy --all-targets --no-default-features --features log -- -D warnings
       - name: Test
+        run: cargo test
+      - name: Test (no default features)
+        run: cargo test --no-default-features
+      - name: Test (db only)
+        run: cargo test --no-default-features --features db
+      - name: Test (log only)
+        run: cargo test --no-default-features --features log
+
+  # The PostgreSQL half of `db.query` needs a server, which the check job does
+  # not have: there the tests skip and print why. This job runs them for real
+  # against a throwaway container. The password exists only in this file and the
+  # database is discarded with the container.
+  database:
+    name: Database (ubuntu-latest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ta
+          POSTGRES_PASSWORD: ta-ci-only
+          POSTGRES_DB: ta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ta -d ta"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TA_TEST_POSTGRES_URL: postgres://ta:ta-ci-only@localhost:5432/ta?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test against PostgreSQL
         run: cargo test
 
   deny:
