@@ -786,6 +786,12 @@ PostgreSQL takes `$1`, `$2`. A boolean bound to SQLite becomes `1` or `0`,
 because SQLite has no boolean type of its own. A parameter list that does not
 match the placeholders is refused by the database.
 
+On PostgreSQL each value is sent at the width its placeholder declares, so
+`WHERE id = $1` works against an `integer` column with `params: [42]`. A number
+that does not fit the placeholder — `70000` for a `smallint`, a fraction for an
+`integer` — is an invalid argument (exit 3) whose message names the parameter
+and the type.
+
 #### Types
 
 | Database type | JSON |
@@ -826,6 +832,11 @@ The database is left exactly as it was. SQLite does not accept a data-modifying
 common table expression at all, so there the statement is a syntax error before
 either read-only layer sees it; PostgreSQL accepts the syntax, and the read-only
 transaction is what refuses it.
+
+One side effect is outside the database file itself: SQLite refuses
+`VACUUM INTO 'copy.db'` because the connection is read-only, but it opens the
+target file before it stops, so an empty `copy.db` can be left behind. No data
+is copied. The step's "never created" promise is about the database it opens.
 
 #### Connection strings and secrets
 
