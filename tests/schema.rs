@@ -304,7 +304,7 @@ fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition 
 }
 
 /// Every registered step definition, keyed by name.
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 fn built_in_registry() -> test_anything::core::registry::Registry {
     let mut registry = test_anything::core::registry::Registry::new();
     test_anything::drivers::register(&mut registry).expect("the built-in drivers must register");
@@ -317,11 +317,12 @@ fn built_in_registry() -> test_anything::core::registry::Registry {
 ///
 /// The values only have to pass `validate`; it checks arguments without
 /// starting the program or opening a connection.
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 fn valid_arguments(step: &str) -> Value {
     match step {
         "cli.run" => json!({"command": "ta"}),
         "http.request" => json!({"url": "http://127.0.0.1:1/health"}),
+        "db.query" => json!({"url": "sqlite:app.db", "sql": "SELECT 1"}),
         other => panic!("add the valid arguments of `{other}` to this test"),
     }
 }
@@ -330,7 +331,7 @@ fn valid_arguments(step: &str) -> Value {
 ///
 /// A bound that the schema can express but this list cannot construct is
 /// caught by the assertion on the constructed value, which fails loudly.
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 fn declared_bounds(schema: &Value) -> Vec<(&'static str, Value)> {
     ["minimum", "minLength", "pattern"]
         .into_iter()
@@ -340,7 +341,7 @@ fn declared_bounds(schema: &Value) -> Vec<(&'static str, Value)> {
 
 /// A value that violates one bound, and a value on the bound when one can be
 /// constructed generically.
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 fn bound_values(keyword: &str, bound: &Value) -> (Value, Option<Value>) {
     match keyword {
         "minimum" => {
@@ -376,7 +377,7 @@ fn bound_values(keyword: &str, bound: &Value) -> (Value, Option<Value>) {
 /// neither may be looser than the other. The reverse direction, a value that
 /// `validate` refuses while the schema accepts it, is covered by the two
 /// `*_timeout_of_zero_*` tests above.
-#[cfg(any(feature = "cli", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
 #[test]
 fn every_declared_argument_bound_is_enforced_by_validate() {
     let registry = built_in_registry();
@@ -735,7 +736,7 @@ fn the_schema_embeds_each_registered_step_with_its_description() {
     );
 }
 
-#[cfg(not(any(feature = "http", feature = "cli")))]
+#[cfg(not(any(feature = "cli", feature = "db", feature = "http")))]
 #[test]
 fn the_schema_is_valid_when_no_step_is_registered() {
     let schema = schema();

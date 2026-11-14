@@ -101,6 +101,7 @@ A case talks to a program or service that is already running: `ta` never starts,
 | --- | --- | --- |
 | `http.request` | HTTP and HTTPS APIs | `status`, `headers`, `body` (parsed when JSON) |
 | `cli.run` | Command-line programs, run without a shell | `exit_code`, `stdout`, `stderr`, `json` |
+| `db.query` | Data an earlier step wrote, read back through SQLite or PostgreSQL | `columns`, `rows`, `row_count`, `truncated` |
 
 Assertions: `equals`, `not_equals`, `contains`, `exists` on any [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html). Variables: `vars`, `save`, `--var name=value` and `--vars-file`, referenced as `${name}`; `${env:NAME}` reads the environment and its value is redacted from output and bundles.
 
@@ -109,6 +110,8 @@ Classify a case with `project`, `suite`, `layer` and `tags`, then run only what 
 Cases run one after another by default; `--jobs N` runs up to N of them at the same time and still reports them in the same order, with the same exit code.
 
 An `observe:` block watches another layer with a read-only observer: the built-in `log.file` reports the log lines a step added, the value appears in the step result as `observed.<name>`, and an ordinary `expect` entry asserts on it and gets it into the failure bundle. See [observers](docs/guide.md#observers).
+
+`db.query` reads the data back with one read-only statement, so a case can confirm what an API call actually stored: SQLite and PostgreSQL are supported, and `INSERT`, `UPDATE`, `DELETE`, DDL and more than one statement are always refused. See [database queries](docs/guide.md#dbquery).
 
 ## For coding agents
 

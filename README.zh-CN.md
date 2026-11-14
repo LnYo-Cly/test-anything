@@ -113,6 +113,7 @@ $ echo $?
 | --- | --- | --- |
 | `http.request` | HTTP 与 HTTPS 接口 | `status`、`headers`、`body`（JSON 会被解析） |
 | `cli.run` | 命令行程序（不经 shell 启动） | `exit_code`、`stdout`、`stderr`、`json` |
+| `db.query` | 用 SQLite 或 PostgreSQL 读回前一步写入的数据 | `columns`、`rows`、`row_count`、`truncated` |
 
 断言：在任意 [JSONPath](https://www.rfc-editor.org/rfc/rfc9535.html) 上使用 `equals`、`not_equals`、`contains`、`exists`。变量：`vars`、`save`、`--var name=value` 和 `--vars-file`，以 `${name}` 引用；`${env:NAME}` 读取环境变量，其值在输出与失败包中替换为 `***`。
 
@@ -121,6 +122,8 @@ $ echo $?
 用例默认逐个执行；`--jobs N` 同时执行最多 N 个用例，输出顺序与退出码不变。
 
 用 `observe:` 声明观察者：每个步骤前后只读采集其他层的证据（内置 `log.file` 报告步骤期间日志文件新增的行），结果并入步骤结果的 `observed.<名字>`，可用现有 `expect` 断言并写入失败包。详见[观察者](docs/guide.md#observers)。
+
+`db.query` 用一条只读语句把数据读回来：接口说成功时，用例还可以直接确认库里到底写了什么。SQLite 与 PostgreSQL 都支持，`INSERT`、`UPDATE`、`DELETE`、DDL 和一次多条语句一律被拒绝。详见[数据库查询](docs/guide.md#dbquery)。
 
 ## 给编程 Agent 用
 
