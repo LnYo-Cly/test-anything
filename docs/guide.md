@@ -299,10 +299,12 @@ JSON Schema for its arguments and a `validate` function that enforces the same
 contract; `ta schema` publishes both under `$defs` and inside `observe`. Its
 factory creates one instance per case, and the instance implements two calls:
 `start` before a step and `collect` after it, which returns the JSON value the
-step result shows under `observed.<name>`. An error from either call is reported
-as a case error, naming the observation and the observer. The contract lives in
-`src/core/observer.rs`; `src/drivers/log.rs` is a complete example, and
-`tests/architecture.rs` keeps the engine free of any concrete observer.
+step result shows under `observed.<name>`. An environment failure from either
+call is an environment error (exit 4); arguments that do not satisfy `validate`
+are a case error (exit 3). Both name the observation and the observer kind. The
+contract lives in `src/core/observer.rs`; `src/drivers/log.rs` is a complete
+example, and `tests/architecture.rs` keeps the engine free of any concrete
+observer.
 
 ### Classification and filtering
 
@@ -769,8 +771,10 @@ steps:
 - A file that does not exist is empty, not an error: a program that creates it
   during the step is exactly what this observer is for. The observer never
   creates or changes the file.
-- A directory, or a file that cannot be read, is an environment error (exit 4)
-  that names the path and the reason.
+- A path that is not a regular file — a directory, for example — and a file
+  that cannot be read are environment errors (exit 4) that name the path and
+  the reason. The check happens before the read, so the reason is the same on
+  every platform.
 - Rotation is detected by length. A file that is replaced between two steps by
   one of the same length or longer cannot be told apart from an append, and a
   file that is rewritten between two steps is read from its recorded length.
