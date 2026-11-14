@@ -841,6 +841,120 @@ steps:
     }
 }
 
+/// The same gate for a path-shaped secret that a message shows with `/`.
+///
+/// `paths::display` rewrites every `\` to `/` before the redactor sees the
+/// text, so a value recorded only in its original form escapes on Windows. The
+/// environment value here is the path of a directory, written with the
+/// platform's separators, and the observation fails on it: both the original
+/// and the forward-slash form must be absent everywhere.
+#[test]
+#[cfg(all(feature = "cli", feature = "log"))]
+fn a_path_shaped_secret_is_redacted_in_both_separator_forms() {
+    const NAME: &str = "TA_TEST_PATH_SECRET";
+
+    let dir = TempDir::new("leak-path-secret");
+    let target = dir.path().join("S3CR3T-DIR-8891");
+    fs::create_dir(&target).expect("the target directory must be created");
+    let secret = target.display().to_string();
+    let normalized = secret.replace('\\', "/");
+
+    let case = dir.write(
+        "case.yaml",
+        &format!(
+            r#"
+name: Secret in an observed path
+observe:
+  app_log:
+    log.file:
+      path: ${{env:{name}}}
+steps:
+  - cli.run:
+      command: '{ta}'
+      args: ["--version"]
+"#,
+            ta = ta(),
+            name = NAME
+        ),
+    );
+
+    let text_bundles = dir.path().join("bundles-text");
+    let text = run_ta_with_env(
+        dir.path(),
+        &[
+            "run",
+            path_str(&case),
+            "--bundle-dir",
+            path_str(&text_bundles),
+        ],
+        &[(NAME, secret.as_str())],
+    );
+    assert_eq!(
+        exit_code(&text),
+        Some(4),
+        "an unreadable observed path is an environment error; stdout: {:?}\nstderr: {:?}",
+        stdout(&text),
+        stderr(&text)
+    );
+
+    let json_bundles = dir.path().join("bundles-json");
+    let json = run_ta_with_env(
+        dir.path(),
+        &[
+            "--output",
+            "json",
+            "run",
+            path_str(&case),
+            "--bundle-dir",
+            path_str(&json_bundles),
+        ],
+        &[(NAME, secret.as_str())],
+    );
+    assert_eq!(
+        exit_code(&json),
+        Some(4),
+        "stdout: {:?}\nstderr: {:?}",
+        stdout(&json),
+        stderr(&json)
+    );
+
+    for (channel, content) in [
+        ("text stdout", stdout(&text)),
+        ("text stderr", stderr(&text)),
+        ("json stdout", stdout(&json)),
+        ("json stderr", stderr(&json)),
+    ] {
+        for value in [&secret, &normalized] {
+            assert!(
+                !content.contains(value.as_str()),
+                "{channel} leaked {value:?}: {content}"
+            );
+        }
+    }
+    for (channel, content) in [
+        ("text stdout", stdout(&text)),
+        ("json stdout", stdout(&json)),
+    ] {
+        assert!(
+            content.contains("***"),
+            "{channel} must show the redaction marker: {content}"
+        );
+    }
+
+    for dir in [&text_bundles, &json_bundles] {
+        for (path, bytes) in files_under(dir) {
+            let text = String::from_utf8_lossy(&bytes);
+            for value in [&secret, &normalized] {
+                assert!(
+                    !text.contains(value.as_str()),
+                    "{} leaked {value:?}: {text}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 /// The same gate for an error message: a preflight failure names the argument
 /// that was rejected, and that argument contains the secret.
 #[test]

@@ -28,10 +28,20 @@ impl Secrets {
     ///
     /// An empty value is not a secret: replacing every empty string would
     /// rewrite the whole output.
+    ///
+    /// A value that contains a backslash is recorded a second time with every
+    /// backslash replaced by a forward slash. [`crate::core::paths::display`]
+    /// rewrites separators that way in every path it shows, so a message may
+    /// hold a transformed copy of the value; redaction replaces exact
+    /// substrings, so the transformed copy has to be a secret as well.
     pub fn record(&mut self, value: &str) {
-        if !value.is_empty() {
-            self.values.insert(value.to_string());
+        if value.is_empty() {
+            return;
         }
+        if value.contains('\\') {
+            self.values.insert(value.replace('\\', "/"));
+        }
+        self.values.insert(value.to_string());
     }
 
     /// Whether nothing has been read from the environment yet.
@@ -147,6 +157,24 @@ mod tests {
         secrets.record("abcdef");
 
         assert_eq!(secrets.redact("abcdef"), "***");
+    }
+
+    #[test]
+    fn a_value_with_backslashes_is_redacted_in_its_forward_slash_form_too() {
+        let mut secrets = Secrets::new();
+        secrets.record(r"C:\dir\s3cr3t\app.log");
+
+        assert_eq!(secrets.redact(r"C:\dir\s3cr3t\app.log"), "***");
+        assert_eq!(
+            secrets.redact("C:/dir/s3cr3t/app.log"),
+            "***",
+            "a path display rewrites the separators of the value, so the rewritten form is a secret"
+        );
+        assert_eq!(
+            secrets.redact("C:/dir/other/app.log"),
+            "C:/dir/other/app.log",
+            "a value that differs from the secret is untouched"
+        );
     }
 
     #[test]
