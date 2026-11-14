@@ -388,9 +388,17 @@ impl Session for Page {
     }
 }
 
-fn open(_args: &serde_json::Value, sessions: &mut Sessions) -> Result<serde_json::Value, StepError> {
+/// Opens the resource, or explains why it could not.
+fn launch_page() -> Result<Page, String> {
+    // ...
+}
+
+fn open(
+    _args: &serde_json::Value,
+    sessions: &mut Sessions,
+) -> Result<serde_json::Value, StepError> {
     let page = sessions
-        .get_or_create("browser.page", || Page::launch())
+        .get_or_create("browser.page", launch_page)
         .map_err(StepError::Execution)?;
     // Use `page` for this step; later steps ask for the same kind.
     Ok(serde_json::json!({ "opened": true }))
