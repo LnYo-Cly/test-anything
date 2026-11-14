@@ -295,7 +295,7 @@ fn an_http_timeout_of_zero_is_rejected_by_the_schema_and_by_validate() {
 
 /// A registered step definition, for tests that compare the schema with
 /// `validate`.
-#[cfg(any(feature = "cli", feature = "db", feature = "http"))]
+#[cfg(any(feature = "cli", feature = "http"))]
 fn step_definition(name: &str) -> test_anything::core::registry::StepDefinition {
     built_in_registry()
         .get(name)
@@ -736,7 +736,7 @@ fn the_schema_embeds_each_registered_step_with_its_description() {
     );
 }
 
-#[cfg(not(any(feature = "http", feature = "cli")))]
+#[cfg(not(any(feature = "cli", feature = "db", feature = "http")))]
 #[test]
 fn the_schema_is_valid_when_no_step_is_registered() {
     let schema = schema();
