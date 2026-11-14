@@ -213,6 +213,114 @@ fn run_and_lint_report_the_same_located_errors() {
     }
 }
 
+/// The registry-level step mistakes: a file name, the file text and the line
+/// and column the error must name.
+///
+/// Each of these needs the step to be registered, so a build without the driver
+/// cannot reach them; the unregistered-step entry of the guard below is the one
+/// every build can check.
+#[cfg(feature = "cli")]
+fn step_registry_mistakes() -> Vec<(&'static str, &'static str, u64, u64)> {
+    vec![
+        (
+            "unknown-argument.yaml",
+            "name: Unknown argument\nsteps:\n  - cli.run:\n      command: ta\n      commnad: ta\n",
+            4,
+            7,
+        ),
+        (
+            "invalid-argument.yaml",
+            "name: Invalid argument\nsteps:\n  - cli.run:\n      command: ta\n      timeout_ms: 0\n",
+            4,
+            7,
+        ),
+        (
+            "undefined-variable.yaml",
+            "name: Undefined variable\nsteps:\n  - cli.run:\n      command: ${target}\n",
+            4,
+            16,
+        ),
+    ]
+}
+
+/// The guard against a step error that reaches the registry without a source
+/// location.
+///
+/// Every registry-level step error names its line and column in `ta lint` and
+/// in `ta run`, keeps the source snippet that makes the location readable, and
+/// points at the node the user has to edit: the step name for an unregistered
+/// step, the argument mapping for arguments, and the value that holds the
+/// reference for an undefined variable. A new registry check adds an entry to
+/// this table.
+#[test]
+fn every_registry_step_error_names_its_line_and_column() {
+    #[allow(unused_mut)] // A build without drivers adds no argument mistake.
+    let mut mistakes = vec![(
+        "unregistered-step.yaml",
+        "name: Unknown step\nsteps:\n  - shell.run:\n      command: echo hi\n",
+        3,
+        5,
+    )];
+    #[cfg(feature = "cli")]
+    mistakes.extend(step_registry_mistakes());
+
+    let dir = TempDir::new("lint-step-locations");
+    for (name, text, _, _) in &mistakes {
+        dir.write(name, text);
+    }
+
+    let lint = run_ta(&["--output", "json", "lint", path_str(dir.path())]);
+    let run = run_ta(&[
+        "--output",
+        "json",
+        "run",
+        path_str(dir.path()),
+        "--no-bundle",
+    ]);
+    assert_eq!(exit_code(&lint), Some(3), "stderr: {:?}", stderr(&lint));
+    assert_eq!(exit_code(&run), Some(3), "stderr: {:?}", stderr(&run));
+
+    let pairs = error_pairs(&json_stdout(&lint));
+    assert_eq!(
+        error_pairs(&json_stdout(&run)),
+        pairs,
+        "run must report the same located errors as lint"
+    );
+    assert_eq!(pairs.len(), mistakes.len(), "got: {pairs:?}");
+
+    for (name, _, line, column) in &mistakes {
+        let location = format!("line {line} column {column}");
+        let (_, message) = pairs
+            .iter()
+            .find(|(file, _)| file.ends_with(name))
+            .unwrap_or_else(|| panic!("{name} must be reported, got: {pairs:?}"));
+        assert!(
+            message.contains(&location),
+            "{name}: the error must name {location}, got: {message:?}"
+        );
+        assert!(
+            message.contains('^'),
+            "{name}: the error must keep the snippet caret, got: {message:?}"
+        );
+    }
+
+    // The text output carries the same location, from either command: lint
+    // writes it to stdout and a rejected run writes it to stderr.
+    let lint_text = stdout(&lint);
+    let run_text = format!("{}{}", stdout(&run), stderr(&run));
+    for (name, _, line, column) in &mistakes {
+        let location = format!("line {line} column {column}");
+        assert!(
+            lint_text.contains(&location),
+            "{name}: lint text must name {location}, got: {lint_text:?}"
+        );
+        assert!(
+            run_text.contains(&location),
+            "{name}: run text must name {location}, got: {run_text:?}"
+        );
+    }
+}
+
 #[cfg(feature = "cli")]
 #[test]
 fn a_valid_case_exits_zero_and_reports_the_file_count() {
