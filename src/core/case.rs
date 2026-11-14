@@ -64,6 +64,28 @@ pub struct Step {
     pub expect: Vec<Expectation>,
     /// Values copied out of the step result into case variables.
     pub save: Vec<SavedValue>,
+    /// Where the step name is written. A registry-dependent error about the
+    /// step itself, such as an unregistered name, points here.
+    pub location: Location,
+    /// Where the step's arguments start. An argument error points here.
+    pub args_location: Location,
+    /// Where every string of `args` is written, by JSON pointer. A reference
+    /// that does not expand points at the value that holds it.
+    pub arg_locations: Vec<(String, Location)>,
+}
+
+impl Step {
+    /// Where the value at `pointer` is written.
+    ///
+    /// Falls back to the arguments mapping, because a pointer only names a
+    /// string the parser recorded and the mapping is still the right node to
+    /// edit.
+    pub fn location_of(&self, pointer: &str) -> Location {
+        self.arg_locations
+            .iter()
+            .find(|(at, _)| at == pointer)
+            .map_or(self.args_location, |(_, location)| *location)
+    }
 }
 
 /// One `expect` entry.
@@ -348,9 +370,9 @@ impl<'de> Deserialize<'de> for RawObservation {
 /// name.
 #[derive(Debug)]
 struct RawStep {
-    /// Keys other than `expect` and `save`, each with its value. A valid step
-    /// has exactly one: the step name.
-    fields: Vec<(String, Spanned<Value>)>,
+    /// Keys other than `expect` and `save`, each with the location of the key
+    /// and of its value. A valid step has exactly one: the step name.
+    fields: Vec<(String, Location, Spanned<RawArgs>)>,
     /// The `expect` value, if the step has one.
     expect: Option<Spanned<RawNodes>>,
     /// The `save` value, if the step has one.
@@ -381,11 +403,17 @@ impl<'de> Deserialize<'de> for RawStep {
                 // The step name is chosen by the case, so the value type of each
                 // key is decided here rather than by a struct: `expect` and
                 // `save` must keep the location of every entry they contain.
-                while let Some(key) = map.next_key::<String>()? {
-                    match key.as_str() {
-                        "expect" => expect = Some(map.next_value()?),
-                        "save" => save = Some(map.next_value()?),
-                        _ => fields.push((key, map.next_value()?)),
+                // The keys keep their own location, because an unregistered
+                // step has to point at its name even when it is not the first
+                // entry of the mapping.
+                while let Some(key) = map.next_key::<Spanned<String>>()? {
+                    let name = key.value;
+                    if name == "expect" {
+                        expect = Some(map.next_value()?);
+                    } else if name == "save" {
+                        save = Some(map.next_value()?);
+                    } else {
+                        fields.push((name, key.referenced, map.next_value()?));
                     }
                 }
                 Ok(RawStep {
@@ -397,6 +425,174 @@ impl<'de> Deserialize<'de> for RawStep {
         }
 
         deserializer.deserialize_map(StepVisitor)
+    }
+}
+
+/// A step's arguments as written, keeping the location of every node.
+///
+/// `Spanned<Value>` knows where a value starts, but the values inside it lose
+/// their own location. A registry error has to point at the argument that is
+/// wrong, so the arguments are read one node at a time.
+#[derive(Debug)]
+enum RawArgs {
+    /// A string, number, boolean or null, with its JSON value.
+    Scalar(Value),
+    /// A list, with the location of every item.
+    List(Vec<Spanned<RawArgs>>),
+    /// A mapping, with the location of every value.
+    Map(Vec<(String, Spanned<RawArgs>)>),
+}
+
+impl RawArgs {
+    /// The kind of value, for an error message.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Scalar(value) => kind_name(value),
+            Self::List(_) => "a list",
+            Self::Map(_) => "a mapping",
+        }
+    }
+
+    /// The JSON value, recording where every string is written.
+    fn into_json(
+        self,
+        pointer: &str,
+        written: Location,
+        strings: &mut Vec<(String, Location)>,
+    ) -> Value {
+        match self {
+            Self::Scalar(value) => {
+                if value.is_string() {
+                    strings.push((pointer.to_string(), written));
+                }
+                value
+            }
+            Self::List(items) => Value::Array(
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        let at = format!("{pointer}/{index}");
+                        let written = item.referenced;
+                        item.value.into_json(&at, written, strings)
+                    })
+                    .collect(),
+            ),
+            Self::Map(entries) => Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let at = child_pointer(pointer, &key);
+                        let written = value.referenced;
+                        (key, value.value.into_json(&at, written, strings))
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// The JSON pointer of one entry of `parent`, with `~` and `/` escaped as the
+/// JSON pointer format requires.
+fn child_pointer(parent: &str, key: &str) -> String {
+    let mut pointer = String::with_capacity(parent.len() + key.len() + 1);
+    pointer.push_str(parent);
+    pointer.push('/');
+    for character in key.chars() {
+        match character {
+            '~' => pointer.push_str("~0"),
+            '/' => pointer.push_str("~1"),
+            other => pointer.push(other),
+        }
+    }
+    pointer
+}
+
+impl<'de> Deserialize<'de> for RawArgs {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ArgsVisitor;
+
+        impl<'de> Visitor<'de> for ArgsVisitor {
+            type Value = RawArgs;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON value")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<RawArgs, E>
+            where
+                E: DeError,
+            {
+                let number = serde_json::Number::from_f64(value)
+                    .ok_or_else(|| E::custom("a non-finite number is not a JSON value"))?;
+                Ok(RawArgs::Scalar(Value::Number(number)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::String(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::String(value)))
+            }
+
+            fn visit_unit<E>(self) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::Null))
+            }
+
+            fn visit_none<E>(self) -> Result<RawArgs, E> {
+                Ok(RawArgs::Scalar(Value::Null))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<RawArgs, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element::<Spanned<RawArgs>>()? {
+                    items.push(item);
+                }
+                Ok(RawArgs::List(items))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<RawArgs, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(key) = map.next_key::<Value>()? {
+                    // A YAML mapping key is not always a string. The case
+                    // format is JSON, so a scalar key becomes its text form and
+                    // anything else is refused, the way `serde_json::Value`
+                    // reads an object.
+                    let key = match key {
+                        Value::String(text) => text,
+                        Value::Number(number) => number.to_string(),
+                        Value::Bool(flag) => flag.to_string(),
+                        _ => return Err(A::Error::custom("an argument name must be a scalar")),
+                    };
+                    entries.push((key, map.next_value::<Spanned<RawArgs>>()?));
+                }
+                Ok(RawArgs::Map(entries))
+            }
+        }
+
+        deserializer.deserialize_any(ArgsVisitor)
     }
 }
 
@@ -540,6 +736,19 @@ fn strip_error_prefix(message: &str) -> String {
         .to_string()
 }
 
+/// Rewrites the parser's message into advice the case format can act on.
+///
+/// A duplicate key is refused on purpose: silently keeping one of the two
+/// values would hide a mistake. The parser ends that message with an option of
+/// its own API, which a case file cannot set, so the sentence becomes what the
+/// user has to edit.
+fn parser_message(message: &str) -> String {
+    strip_error_prefix(message).replace(
+        ", set DuplicateKeyPolicy in Options if acceptable",
+        "; keep each key once",
+    )
+}
+
 /// Parses one case file's text.
 ///
 /// Errors carry the location of the node they belong to: the one the YAML
@@ -547,7 +756,7 @@ fn strip_error_prefix(message: &str) -> String {
 /// assertion or `save` entry for a structural error.
 pub fn parse(text: &str) -> Result<Case, String> {
     let raw: Spanned<RawCase> =
-        serde_saphyr::from_str(text).map_err(|error| strip_error_prefix(&error.to_string()))?;
+        serde_saphyr::from_str(text).map_err(|error| parser_message(&error.to_string()))?;
     build_case(raw).map_err(|problem| problem.render(text))
 }
 
@@ -761,15 +970,15 @@ fn parse_step(index: usize, step: Spanned<RawStep>) -> Result<Step, Problem> {
         save,
     } = step.value;
 
-    let (action, args) = match fields.len() {
+    let (action, name_location, args) = match fields.len() {
         1 => {
-            let Some((action, args)) = fields.pop() else {
+            let Some(field) = fields.pop() else {
                 return Err(Problem {
                     location,
                     message: format!("step {index}: expected one step name"),
                 });
             };
-            (action, args)
+            field
         }
         0 => {
             return Err(Problem {
@@ -780,7 +989,7 @@ fn parse_step(index: usize, step: Spanned<RawStep>) -> Result<Step, Problem> {
             });
         }
         count => {
-            let names: Vec<String> = fields.into_iter().map(|(name, _)| name).collect();
+            let names: Vec<String> = fields.into_iter().map(|(name, _, _)| name).collect();
             return Err(Problem {
                 location,
                 message: format!(
@@ -791,15 +1000,19 @@ fn parse_step(index: usize, step: Spanned<RawStep>) -> Result<Step, Problem> {
         }
     };
 
-    if !args.value.is_object() {
+    if !matches!(args.value, RawArgs::Map(_)) {
         return Err(Problem {
             location: args.referenced,
             message: format!(
                 "step {index}: `{action}` takes a mapping of arguments, found {}",
-                kind_name(&args.value)
+                args.value.kind()
             ),
         });
     }
+
+    let args_location = args.referenced;
+    let mut arg_locations = Vec::new();
+    let args = args.value.into_json("", args_location, &mut arg_locations);
 
     let expect = match expect {
         None => Vec::new(),
@@ -862,9 +1075,12 @@ fn parse_step(index: usize, step: Spanned<RawStep>) -> Result<Step, Problem> {
 
     Ok(Step {
         action,
-        args: args.value,
+        args,
         expect,
         save,
+        location: name_location,
+        args_location,
+        arg_locations,
     })
 }
 
@@ -1012,6 +1228,16 @@ pub fn kind_name(value: &Value) -> &'static str {
     }
 }
 
+/// A value whose `${...}` references could not be expanded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterpolateError {
+    /// What is wrong and what to write instead.
+    pub message: String,
+    /// JSON pointer of the string that holds the failing reference, so the
+    /// caller can point at the value the user has to edit.
+    pub pointer: String,
+}
+
 /// Expands every `${name}` reference inside `value`.
 ///
 /// The substitution is textual and applies to strings only, so a variable may
@@ -1022,20 +1248,42 @@ pub fn interpolate(
     value: &Value,
     vars: &BTreeMap<String, String>,
     secrets: &mut Secrets,
-) -> Result<Value, String> {
+) -> Result<Value, InterpolateError> {
+    interpolate_at(value, vars, secrets, "")
+}
+
+fn interpolate_at(
+    value: &Value,
+    vars: &BTreeMap<String, String>,
+    secrets: &mut Secrets,
+    pointer: &str,
+) -> Result<Value, InterpolateError> {
     match value {
-        Value::String(text) => Ok(Value::String(interpolate_str(text, vars, secrets)?)),
+        Value::String(text) => interpolate_str(text, vars, secrets)
+            .map(Value::String)
+            .map_err(|message| InterpolateError {
+                message,
+                pointer: pointer.to_string(),
+            }),
         Value::Array(items) => {
             let mut expanded = Vec::with_capacity(items.len());
-            for item in items {
-                expanded.push(interpolate(item, vars, secrets)?);
+            for (index, item) in items.iter().enumerate() {
+                expanded.push(interpolate_at(
+                    item,
+                    vars,
+                    secrets,
+                    &format!("{pointer}/{index}"),
+                )?);
             }
             Ok(Value::Array(expanded))
         }
         Value::Object(entries) => {
             let mut expanded = Map::new();
             for (key, item) in entries {
-                expanded.insert(key.clone(), interpolate(item, vars, secrets)?);
+                expanded.insert(
+                    key.clone(),
+                    interpolate_at(item, vars, secrets, &child_pointer(pointer, key))?,
+                );
             }
             Ok(Value::Object(expanded))
         }
@@ -1242,7 +1490,7 @@ pub fn load_vars_file(path: &Path) -> Result<Vec<(String, String)>, String> {
             format!(
                 "{}: {}",
                 paths::display(path),
-                strip_error_prefix(&error.to_string())
+                parser_message(&error.to_string())
             )
         })?;
 
@@ -1582,9 +1830,17 @@ steps:
             serde_json::json!({"who": "hi alice", "nested": ["alice"]})
         );
 
-        let error = interpolate(&serde_json::json!("${missing}"), &vars, &mut secrets)
-            .expect_err("the reference must be rejected");
-        assert!(error.contains("missing"), "got: {error}");
+        let error = interpolate(
+            &serde_json::json!({"outer": {"inner": "${missing}"}}),
+            &vars,
+            &mut secrets,
+        )
+        .expect_err("the reference must be rejected");
+        assert!(error.message.contains("missing"), "got: {error:?}");
+        assert_eq!(
+            error.pointer, "/outer/inner",
+            "the error must name the value that holds the reference"
+        );
     }
 
     #[test]
@@ -1632,8 +1888,14 @@ steps:
         )
         .expect_err("the reference must be rejected");
 
-        assert!(error.contains("TA_CORE_UNIT_MISSING_5C9D"), "got: {error}");
-        assert!(error.contains("set it before running"), "got: {error}");
+        assert!(
+            error.message.contains("TA_CORE_UNIT_MISSING_5C9D"),
+            "got: {error:?}"
+        );
+        assert!(
+            error.message.contains("set it before running"),
+            "got: {error:?}"
+        );
 
         for (reference, fragment) in [
             ("${env:}", "empty environment variable name"),
@@ -1642,7 +1904,7 @@ steps:
         ] {
             let error = interpolate(&serde_json::json!(reference), &vars, &mut secrets)
                 .expect_err("the reference must be rejected");
-            assert!(error.contains(fragment), "{reference}: {error}");
+            assert!(error.message.contains(fragment), "{reference}: {error:?}");
         }
     }
 
@@ -1772,6 +2034,64 @@ steps:
 
         assert!(error.contains("no steps"), "got: {error}");
         assert!(error.starts_with("line 1 column 1: "), "got: {error}");
+    }
+
+    #[test]
+    fn a_step_keeps_the_locations_of_its_name_and_arguments() {
+        let case = parse(
+            "name: Example\nsteps:\n  - sample.call:\n      target: local\n      nested:\n        - ${port}\n",
+        )
+        .expect("the case must parse");
+        let step = &case.steps[0];
+
+        assert_eq!(step.location.line(), 3);
+        assert_eq!(step.location.column(), 5);
+        assert_eq!(step.args_location.line(), 4);
+        assert_eq!(step.args_location.column(), 7);
+        let value = step.location_of("/nested/0");
+        assert_eq!((value.line(), value.column()), (6, 11));
+        assert_eq!(
+            step.location_of("/missing"),
+            step.args_location,
+            "an unknown pointer must fall back to the arguments mapping"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_mapping_key_names_the_key_and_what_to_do() {
+        let error =
+            parse("name: Broken\nsteps:\n  - sample.call:\n      params: []\n      params: []\n")
+                .expect_err("the duplicate key must be rejected");
+
+        assert!(
+            !error.contains("DuplicateKeyPolicy"),
+            "the message must not name a parser option, got: {error}"
+        );
+        assert!(error.contains("duplicate mapping key"), "got: {error}");
+        assert!(error.contains("params"), "got: {error}");
+        assert!(error.contains("keep each key once"), "got: {error}");
+        assert!(error.starts_with("line 5 column 7: "), "got: {error}");
+    }
+
+    #[test]
+    fn a_vars_file_refuses_a_duplicate_key_without_the_parser_option_name() {
+        let dir =
+            std::env::temp_dir().join(format!("ta-core-vars-duplicate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "port: 8080\nport: 9090\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the duplicate key must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(
+            !error.contains("DuplicateKeyPolicy"),
+            "the message must not name a parser option, got: {error}"
+        );
+        assert!(error.contains("keep each key once"), "got: {error}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

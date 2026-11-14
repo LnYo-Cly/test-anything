@@ -235,24 +235,29 @@ pub fn preflight(
         for (index, step) in loaded.case.steps.iter().enumerate() {
             let position = index + 1;
             match case::interpolate(&step.args, &vars, secrets) {
-                Err(message) => errors.push(CaseError {
-                    file: loaded.path.clone(),
-                    message: format!("step {position}: {message}"),
-                }),
+                Err(error) => errors.push(positioned(
+                    loaded,
+                    step.location_of(&error.pointer),
+                    format!("step {position}: {}", error.message),
+                )),
                 Ok(args) => match registry.get(&step.action) {
-                    None => errors.push(CaseError {
-                        file: loaded.path.clone(),
-                        message: format!(
+                    None => errors.push(positioned(
+                        loaded,
+                        step.location,
+                        format!(
                             "step {position}: `{}` is not a registered step; {hint}",
                             step.action
                         ),
-                    }),
+                    )),
                     Some(definition) => {
                         if let Err(message) = (definition.validate)(&args) {
-                            errors.push(CaseError {
-                                file: loaded.path.clone(),
-                                message: format!("step {position}: `{}` {message}", step.action),
-                            });
+                            // Arguments are validated as one mapping, so the
+                            // mapping start is the node the message names.
+                            errors.push(positioned(
+                                loaded,
+                                step.args_location,
+                                format!("step {position}: `{}` {message}", step.action),
+                            ));
                         }
                     }
                 },
@@ -296,11 +301,11 @@ fn check_observation(
     secrets: &mut Secrets,
 ) -> Result<(), CaseError> {
     let name = &observation.name;
-    let args = case::interpolate(&observation.args, vars, secrets).map_err(|message| {
+    let args = case::interpolate(&observation.args, vars, secrets).map_err(|error| {
         positioned(
             loaded,
             observation.args_location,
-            format!("observation `{name}`: {message}"),
+            format!("observation `{name}`: {}", error.message),
         )
     })?;
     let Some(definition) = registry.observer(&observation.kind) else {
@@ -471,9 +476,9 @@ fn create_observations(
             let mut secrets = lock(secrets);
             case::interpolate(&observation.args, vars, &mut secrets)
         }
-        .map_err(|message| Problem {
+        .map_err(|error| Problem {
             kind: ProblemKind::InvalidInput,
-            message: format!("observation `{}`: {message}", observation.name),
+            message: format!("observation `{}`: {}", observation.name, error.message),
         })?;
         let Some(definition) = registry.observer(&observation.kind) else {
             return Err(Problem {
@@ -532,9 +537,9 @@ fn execute_step(
         let mut secrets = lock(secrets);
         case::interpolate(&step.args, vars, &mut secrets)
     }
-    .map_err(|message| Problem {
+    .map_err(|error| Problem {
         kind: ProblemKind::Execution,
-        message,
+        message: error.message,
     })?;
 
     // Every observation starts before the step, so what it reports is the
@@ -829,6 +834,9 @@ mod tests {
             args: json!({ "ms": millis, "value": value }),
             expect: Vec::new(),
             save: Vec::new(),
+            location: Location::UNKNOWN,
+            args_location: Location::UNKNOWN,
+            arg_locations: Vec::new(),
         }
     }
 
@@ -838,6 +846,9 @@ mod tests {
             args: json!({ "value": value }),
             expect,
             save: Vec::new(),
+            location: Location::UNKNOWN,
+            args_location: Location::UNKNOWN,
+            arg_locations: Vec::new(),
         }
     }
 
@@ -905,6 +916,9 @@ mod tests {
             args: json!({}),
             expect: Vec::new(),
             save: Vec::new(),
+            location: Location::UNKNOWN,
+            args_location: Location::UNKNOWN,
+            arg_locations: Vec::new(),
         };
         let mut cases = loaded(vec![failing]);
         cases.push(LoadedCase {
@@ -1034,6 +1048,9 @@ mod tests {
                 matcher: crate::core::case::Matcher::Equals(json!("abc")),
             }],
             save: Vec::new(),
+            location: Location::UNKNOWN,
+            args_location: Location::UNKNOWN,
+            arg_locations: Vec::new(),
         };
 
         let outcome = run(
@@ -1176,6 +1193,9 @@ mod tests {
                     args: json!({}),
                     expect: Vec::new(),
                     save: Vec::new(),
+                    location: Location::UNKNOWN,
+                    args_location: Location::UNKNOWN,
+                    arg_locations: Vec::new(),
                 }],
             ),
         };
@@ -1480,6 +1500,9 @@ mod tests {
                     },
                 ],
                 save: Vec::new(),
+                location: Location::UNKNOWN,
+                args_location: Location::UNKNOWN,
+                arg_locations: Vec::new(),
             }],
         );
         case.observe = vec![observation(
