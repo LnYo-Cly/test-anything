@@ -1,4 +1,4 @@
-# Contributing to test-anything
+# Contributing to do-anything
 
 [简体中文](CONTRIBUTING.zh-CN.md)
 
@@ -64,7 +64,7 @@ The template is in [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPL
 | `src/core/` | Domain-neutral engine: case model, registry, event bus, runner, failure bundle, output. |
 | `src/drivers/` | One module per driver (`http`, `cli`, ...), each behind its own cargo feature. |
 | `tests/` | Integration tests that run the compiled binary. |
-| `tests/self/` | Cases that `ta` runs against itself. |
+| `tests/self/` | Cases that `da` runs against itself. |
 
 `src/core/`, `src/drivers/` and `tests/self/` are created by the changes that first need them.
 

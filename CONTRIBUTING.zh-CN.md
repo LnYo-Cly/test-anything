@@ -1,4 +1,4 @@
-# 参与贡献 test-anything
+# 参与贡献 do-anything
 
 [English](CONTRIBUTING.md)
 
@@ -64,7 +64,7 @@
 | `src/core/` | 领域中立的引擎：用例模型、注册表、事件总线、运行器、失败包、输出。 |
 | `src/drivers/` | 每个驱动一个模块（`http`、`cli` 等），各自由一个 cargo feature 控制。 |
 | `tests/` | 运行编译后二进制的集成测试。 |
-| `tests/self/` | `ta` 用来测试自己的用例。 |
+| `tests/self/` | `da` 用来测试自己的用例。 |
 
 `src/core/`、`src/drivers/` 和 `tests/self/` 由第一个用到它们的改动创建。
 
