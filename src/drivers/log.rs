@@ -86,7 +86,8 @@ impl Observer for LogFile {
         // A file that does not exist yet is a file with no content: the program
         // under test may create it during this step.
         self.position = match std::fs::metadata(&self.path) {
-            Ok(metadata) => metadata.len(),
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            Ok(_) => return Err(not_a_file(&self.path)),
             Err(error) if error.kind() == ErrorKind::NotFound => 0,
             Err(error) => return Err(environment(&self.path, &error)),
         };
@@ -94,8 +95,13 @@ impl Observer for LogFile {
     }
 
     fn collect(&mut self) -> Result<Value, ObserverError> {
-        let mut file = match File::open(&self.path) {
-            Ok(file) => file,
+        // The metadata is read before the file is opened. A directory can be
+        // opened and read on some platforms and refused on others, and a read
+        // of it may return no bytes at all, so the platform decides nothing
+        // here: a path that is not a regular file is always the same error.
+        let length = match std::fs::metadata(&self.path) {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            Ok(_) => return Err(not_a_file(&self.path)),
             // A file that was never created, or was removed during the step,
             // has added nothing.
             Err(error) if error.kind() == ErrorKind::NotFound => {
@@ -103,10 +109,7 @@ impl Observer for LogFile {
             }
             Err(error) => return Err(environment(&self.path, &error)),
         };
-        let length = file
-            .metadata()
-            .map_err(|error| environment(&self.path, &error))?
-            .len();
+        let mut file = File::open(&self.path).map_err(|error| environment(&self.path, &error))?;
 
         // A file that is shorter than it was when the step started was
         // truncated or rotated, so the content that matters starts at the
@@ -165,6 +168,18 @@ fn lines(text: &str) -> Vec<String> {
 fn environment(path: &Path, error: &std::io::Error) -> ObserverError {
     ObserverError::Environment(format!(
         "could not read `{}`: {error}",
+        paths::display(path)
+    ))
+}
+
+/// The error for a path that exists but is not a regular file.
+///
+/// A directory is the common case: reading one succeeds on some platforms and
+/// fails on others, so the check happens before any read and the message is the
+/// same everywhere.
+fn not_a_file(path: &Path) -> ObserverError {
+    ObserverError::Environment(format!(
+        "could not read `{}`: it is not a regular file",
         paths::display(path)
     ))
 }
@@ -265,21 +280,45 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_is_an_environment_error_that_names_it() {
+    fn a_directory_is_an_environment_error_on_every_platform() {
         let dir = fixture("directory");
         let mut observer = observer(&dir);
 
-        observer.start().expect("a directory has a length");
-        let error = observer
-            .collect()
-            .expect_err("a directory cannot be read as a file");
+        let error = observer.start().expect_err("a directory is not a log file");
 
         let ObserverError::Environment(message) = error else {
             panic!("expected an environment error, got: {error:?}");
         };
         assert!(
-            message.contains(&paths::display(&dir)),
-            "the message must name the path, got: {message}"
+            message.contains("directory"),
+            "the message must name the target, got: {message}"
+        );
+        assert!(
+            message.contains("not a regular file"),
+            "the message must say what is wrong, got: {message}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_target_that_becomes_a_directory_before_collect_is_an_environment_error() {
+        let dir = fixture("late-directory");
+        let log = dir.join("app.log");
+        let mut observer = observer(&log);
+        observer.start().expect("a missing file is empty");
+        std::fs::create_dir(&log).expect("the directory must be created");
+
+        let error = observer
+            .collect()
+            .expect_err("a directory cannot be read as a log file");
+
+        let ObserverError::Environment(message) = error else {
+            panic!("expected an environment error, got: {error:?}");
+        };
+        assert!(
+            message.contains("not a regular file"),
+            "the message must say what is wrong, got: {message}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

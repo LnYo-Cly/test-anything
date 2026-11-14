@@ -531,7 +531,8 @@ steps:
 fn an_observer_that_cannot_read_is_an_environment_error() {
     let server = TestServer::start();
     let dir = TempDir::new("observe-error");
-    // A directory cannot be read as a file, on every platform.
+    // A directory is not a regular file, so the observer refuses it before the
+    // step runs, on every platform.
     let log = dir.path().join("not-a-file");
     fs::create_dir(&log).expect("the blocking directory must be created");
 
@@ -566,6 +567,10 @@ fn an_observer_that_cannot_read_is_an_environment_error() {
         .unwrap_or_else(|| panic!("the error must carry a message: {step}"));
     assert!(message.contains("app_log"), "got: {message}");
     assert!(message.contains("log.file"), "got: {message}");
+    assert!(
+        message.contains("not a regular file"),
+        "the reason must be the same on every platform, got: {message}"
+    );
 }
 
 #[cfg(feature = "cli")]
