@@ -394,5 +394,38 @@ mod tests {
             errors[0].contains("the connection was already gone"),
             "got: {errors:?}"
         );
+        assert!(
+            sessions.close_all().is_empty(),
+            "a failed close must still remove the session"
+        );
+    }
+
+    #[test]
+    fn a_close_failure_does_not_stop_the_other_sessions() {
+        let mut sessions = Sessions::new();
+        let log = Log::default();
+        sessions
+            .get_or_create("test.first", || Ok(tracked(&log, 1)))
+            .expect("the first session must be created");
+        sessions
+            .get_or_create("test.broken", || {
+                Ok(Failing {
+                    message: "the connection was already gone".to_string(),
+                })
+            })
+            .expect("the broken session must be created");
+        sessions
+            .get_or_create("test.last", || Ok(tracked(&log, 2)))
+            .expect("the last session must be created");
+
+        let errors = sessions.close_all();
+
+        assert_eq!(errors.len(), 1, "got: {errors:?}");
+        assert!(errors[0].contains("test.broken"), "got: {errors:?}");
+        assert_eq!(
+            log.entries(),
+            vec!["close 2", "close 1"],
+            "the later session must close first and the failure must not stop the earlier one"
+        );
     }
 }
