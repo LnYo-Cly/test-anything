@@ -12,6 +12,7 @@ The complete reference for `ta`: installation options, building from source, the
   - [Parallel runs](#parallel-runs)
   - [The service under test](#the-service-under-test)
   - [Observers](#observers)
+    - [Observers and parallel runs](#observers-and-parallel-runs)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
   - [Secrets](#secrets)
@@ -269,9 +270,17 @@ steps:
     expect:
       - path: $.status
         equals: 201
-      - path: $.observed.app_log.lines
+      - path: $.observed.app_log.text
         contains: "order created"
 ```
+
+`text` is the new log text as one string, so `contains` asks whether it holds
+that substring. `lines` is a list, and `contains` on a list asks whether one
+element is exactly the expected value — not whether an element contains it. A
+line such as `request method=POST ... order created` is therefore not a match for
+`contains: "order created"` on `lines`. Use `text` for a substring, and a path
+into one element, such as `$.observed.app_log.lines[0]`, with `equals` when the
+exact line matters.
 
 The collected value is merged into **every step result** of the case as
 `observed.<name>`, before the assertions are evaluated. An ordinary `expect` path
@@ -283,11 +292,56 @@ carries the same values, redacted like everything else.
 | Name | Becomes a key of `observed`, so it uses lowercase letters, digits, `.`, `_` and `-`. A repeated name is a duplicate mapping key and the YAML parser refuses it with its line and column. |
 | One observer | An entry names exactly one observer and its arguments. An unknown observer or arguments that do not satisfy its schema is a case error (exit 3), reported by `ta lint` and `ta run` with the line and column of the node. |
 | Variables | Arguments accept `${name}` and `${env:NAME}` and are resolved once, when the case starts. A value a step `save`s is not available to an observation. |
-| Isolation | Each case creates its own observation. Cases that run at the same time with `--jobs` never share state. |
+| Isolation | Each case creates its own observation, but the file it reads is shared state: a case that observes the same log file as another case sees its lines too. See [Observers and parallel runs](#observers-and-parallel-runs). |
 | Steps | The observer starts before each step and is collected after it, so it reports what that one step changed. |
 | Read-only | Observers only read. The built-in ones open files for reading and write nothing. |
 | Observer errors | A file that cannot be read is an environment error (exit 4); the message names the observation and the observer. |
 | No result | A step that fails or times out produces no result, so its observation is not collected: there is nothing to merge it into. |
+
+#### Observers and parallel runs
+
+An observation is only as isolated as the file it reads. When several cases
+observe one log file and run at the same time with `--jobs`, the lines another
+case adds during a step are part of this case's `observed.<name>.text` and
+`lines` too. The observed value then depends on how many cases run at once, and
+an assertion such as `contains: "order created"` can pass on another case's line.
+That is the "one file under a fixed path" shared state of
+[Parallel runs](#parallel-runs), reached through an observer.
+
+Give each case its own log file, and let the program under test write to the file
+the case names. A case takes the directory from the environment and chooses the
+file name itself:
+
+```yaml
+name: Customer order is logged
+vars:
+  log_name: customer
+observe:
+  app_log:
+    log.file:
+      path: ${log_dir}/${log_name}.log
+steps:
+  - http.request:
+      method: POST
+      url: ${base}/orders
+      json: { sku: SKU-CUSTOMER }
+    expect:
+      - path: $.observed.app_log.text
+        contains: "SKU-CUSTOMER"
+```
+
+A second case is the same file with `log_name: status` and its own SKU, and the
+service writes `${log_dir}/customer.log` and `${log_dir}/status.log` — one worker
+or log target per case, chosen so that a request cannot reach the other file.
+Then `ta run cases/ --jobs 2` observes only its own case's lines, and the result
+is the same as with `--jobs 1`. `base` and `log_dir` come from a `--vars-file`, as
+in [Usage](#usage).
+
+If the program can only write one file, do not raise `--jobs` for those cases:
+run them with `--jobs 1` and a `--tag` of their own, as
+[Parallel runs](#parallel-runs) says. A shared log does not fail by itself — it
+makes the observed value depend on the other cases, which is worse, because the
+assertion can still pass.
 
 Every built-in step returns a JSON object. If a plugin's step returns another
 value and the case declares observations, the result is wrapped so that nothing
@@ -407,13 +461,22 @@ cases/logout.yaml: line 2 column 1: unknown field `naem`, expected one of name, 
 Checked 2 files: 2 errors.
 ```
 
-Problems that need the registry, such as an undefined variable, a step argument
-that does not match the step's schema, or an observation that names an unknown
-observer, name the node instead, and carry its line and column, because the
-parser cannot know them:
+Problems that need the registry — an unregistered step name, step arguments that
+do not match the step's schema, an undefined variable, or an observation that
+names an unknown observer — name the node the user has to edit and carry its line
+and column, because the parser cannot know them. An unregistered step points at
+its name, an argument error at the step's argument mapping, and an undefined
+variable at the value that holds the reference:
 
 ```text
-cases/login.yaml: step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step
+cases/login.yaml: line 12 column 33: step 2: undefined variable `${acces_token}`; define it under `vars:` or save it in an earlier step
+  --> <input>:12:33
+   |
+10 |   - http.request:
+11 |       url: ${base}/me
+12 |       headers: { Authorization: "Bearer ${acces_token}" }
+   |                                 ^ step 2: undefined variable `${acces_token}`; define it under `vars:` or save it in an earlier step
+Checked 1 file: 1 error.
 ```
 
 ```text
@@ -437,7 +500,7 @@ cases/login.yaml: line 4 column 5: observation `app_log`: `log.fil` is not a reg
   "errors": [
     {
       "file": "cases/login.yaml",
-      "message": "step 2: undefined variable `${token}`; define it under `vars:` or save it in an earlier step"
+      "message": "line 12 column 33: step 2: undefined variable `${acces_token}`; define it under `vars:` or save it in an earlier step"
     }
   ],
   "cases": [
@@ -452,6 +515,9 @@ cases/login.yaml: line 4 column 5: observation `app_log`: `log.fil` is not a reg
   ]
 }
 ```
+
+A located message also carries the source snippet, with its line breaks escaped
+as `\n` inside the JSON string; the example shows the first line only.
 
 `cases` lists every case that parsed, with its classification, so an agent can
 discover the available values without running anything. `project`, `suite` and
@@ -871,7 +937,7 @@ The result is an object with `lines`, `text`, `truncated` and `limited`:
 
 | Field | Meaning |
 | --- | --- |
-| `lines` | The new text split into lines. A trailing `\r` is dropped, so a CRLF log reads like an LF one; a final newline does not start an empty line; a last line without a newline still counts as a line. |
+| `lines` | The new text split into lines. A trailing `\r` is dropped, so a CRLF log reads like an LF one; a final newline does not start an empty line; a last line without a newline still counts as a line. `contains` on this list requires one element to equal the expected value; it is not a substring match, so use `text` for a substring. |
 | `text` | The new text exactly as read. |
 | `truncated` | `true` when the file is shorter than it was when the step started — it was truncated or rotated — and the read therefore restarted at the beginning. |
 | `limited` | `true` when the step added more than 1 MiB: only the first 1 MiB is reported, so one noisy step cannot fill a failure bundle or a terminal. |
@@ -889,7 +955,7 @@ steps:
     expect:
       - path: $.exit_code
         equals: 0
-      - path: $.observed.worker_log.lines
+      - path: $.observed.worker_log.text
         contains: "order created"
       - path: $.observed.worker_log.truncated
         equals: false
