@@ -736,6 +736,19 @@ fn strip_error_prefix(message: &str) -> String {
         .to_string()
 }
 
+/// Rewrites the parser's message into advice the case format can act on.
+///
+/// A duplicate key is refused on purpose: silently keeping one of the two
+/// values would hide a mistake. The parser ends that message with an option of
+/// its own API, which a case file cannot set, so the sentence becomes what the
+/// user has to edit.
+fn parser_message(message: &str) -> String {
+    strip_error_prefix(message).replace(
+        ", set DuplicateKeyPolicy in Options if acceptable",
+        "; keep each key once",
+    )
+}
+
 /// Parses one case file's text.
 ///
 /// Errors carry the location of the node they belong to: the one the YAML
@@ -743,7 +756,7 @@ fn strip_error_prefix(message: &str) -> String {
 /// assertion or `save` entry for a structural error.
 pub fn parse(text: &str) -> Result<Case, String> {
     let raw: Spanned<RawCase> =
-        serde_saphyr::from_str(text).map_err(|error| strip_error_prefix(&error.to_string()))?;
+        serde_saphyr::from_str(text).map_err(|error| parser_message(&error.to_string()))?;
     build_case(raw).map_err(|problem| problem.render(text))
 }
 
@@ -1477,7 +1490,7 @@ pub fn load_vars_file(path: &Path) -> Result<Vec<(String, String)>, String> {
             format!(
                 "{}: {}",
                 paths::display(path),
-                strip_error_prefix(&error.to_string())
+                parser_message(&error.to_string())
             )
         })?;
 
@@ -2042,6 +2055,43 @@ steps:
             step.args_location,
             "an unknown pointer must fall back to the arguments mapping"
         );
+    }
+
+    #[test]
+    fn a_duplicate_mapping_key_names_the_key_and_what_to_do() {
+        let error =
+            parse("name: Broken\nsteps:\n  - sample.call:\n      params: []\n      params: []\n")
+                .expect_err("the duplicate key must be rejected");
+
+        assert!(
+            !error.contains("DuplicateKeyPolicy"),
+            "the message must not name a parser option, got: {error}"
+        );
+        assert!(error.contains("duplicate mapping key"), "got: {error}");
+        assert!(error.contains("params"), "got: {error}");
+        assert!(error.contains("keep each key once"), "got: {error}");
+        assert!(error.starts_with("line 5 column 7: "), "got: {error}");
+    }
+
+    #[test]
+    fn a_vars_file_refuses_a_duplicate_key_without_the_parser_option_name() {
+        let dir =
+            std::env::temp_dir().join(format!("ta-core-vars-duplicate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+        let path = dir.join("vars.yaml");
+        std::fs::write(&path, "port: 8080\nport: 9090\n").expect("write the vars file");
+
+        let error = load_vars_file(&path).expect_err("the duplicate key must be rejected");
+
+        assert!(error.contains("vars.yaml"), "got: {error}");
+        assert!(
+            !error.contains("DuplicateKeyPolicy"),
+            "the message must not name a parser option, got: {error}"
+        );
+        assert!(error.contains("keep each key once"), "got: {error}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
