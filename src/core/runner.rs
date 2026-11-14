@@ -440,11 +440,29 @@ fn run_case(
         steps.push(report);
     }
 
-    let status = match stopped.as_ref().map(|problem| problem.kind) {
+    // Every session belongs to this case and is closed here, whatever path the
+    // case took. `close_all` removes a session before closing it, so a failing
+    // close cannot be attempted twice.
+    let close_errors = sessions.close_all();
+
+    let mut status = match stopped.as_ref().map(|problem| problem.kind) {
         None => CaseStatus::Passed,
         Some(ProblemKind::Assertion) => CaseStatus::Failed,
         Some(_) => CaseStatus::Error,
     };
+    let mut error = stopped;
+    // A case that already failed or errored keeps its own verdict; the close
+    // errors are attached to the report without replacing the problem. A case
+    // that would otherwise pass becomes an environment error, because a
+    // resource that could not be released is an environment problem, not a
+    // test result.
+    if !close_errors.is_empty() && status == CaseStatus::Passed {
+        status = CaseStatus::Error;
+        error = Some(Problem {
+            kind: ProblemKind::Environment,
+            message: close_error_message(&close_errors),
+        });
+    }
 
     CaseReport {
         file: loaded.path.clone(),
@@ -456,9 +474,22 @@ fn run_case(
         status,
         duration: started.elapsed(),
         steps,
-        error: stopped,
+        error,
+        close_errors,
         bundle: None,
     }
+}
+
+/// The one problem a case reports when its sessions could not be closed.
+fn close_error_message(errors: &[String]) -> String {
+    if let [message] = errors {
+        return message.clone();
+    }
+    format!(
+        "{} sessions could not be closed: {}",
+        errors.len(),
+        errors.join("; ")
+    )
 }
 
 /// One declared observation, ready to start and collect around every step.

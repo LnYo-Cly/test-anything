@@ -229,6 +229,9 @@ fn text_report(outcome: &RunOutcome, secrets: &Secrets) -> Rendered {
                 }
             }
         }
+        for close_error in &case.close_errors {
+            stdout.push_str(&format!("  close: {close_error}\n"));
+        }
         if let Some(bundle) = &case.bundle {
             stdout.push_str(&format!("  bundle: {}\n", paths::display(bundle)));
         }
@@ -399,6 +402,7 @@ pub fn case_json(case: &CaseReport) -> Value {
         "bundle": case.bundle.as_ref().map(|path| paths::display(path)),
         "steps": case.steps.iter().map(step_value).collect::<Vec<Value>>(),
         "error": case.error.as_ref().map(problem_value),
+        "close_errors": case.close_errors,
     })
 }
 
@@ -476,6 +480,7 @@ mod tests {
                     kind: ProblemKind::Assertion,
                     message: "1 of 1 assertions failed".to_string(),
                 }),
+                close_errors: Vec::new(),
                 bundle: Some(PathBuf::from(".ta/failures/17-42/0-Login")),
             }],
             filtered: 2,
