@@ -7,6 +7,8 @@ use crate::core::registry::Registry;
 
 #[cfg(feature = "cli")]
 pub mod cli;
+#[cfg(feature = "db")]
+pub mod db;
 #[cfg(feature = "http")]
 pub mod http;
 #[cfg(feature = "log")]
@@ -18,11 +20,15 @@ pub fn register(registry: &mut Registry) -> Result<(), String> {
     {
         cli::register(registry)?;
     }
+    #[cfg(feature = "db")]
+    {
+        db::register(registry)?;
+    }
     #[cfg(feature = "http")]
     {
         http::register(registry)?;
     }
-    #[cfg(not(any(feature = "cli", feature = "http")))]
+    #[cfg(not(any(feature = "cli", feature = "db", feature = "http")))]
     {
         let _ = registry;
     }
