@@ -18,7 +18,7 @@ use test_anything::core::filter::Filters;
 use test_anything::core::observer::{Observer, ObserverDefinition, ObserverError};
 use test_anything::core::output::{self, Format};
 use test_anything::core::registry::{Registry, StepDefinition, StepError};
-use test_anything::core::report::{CaseStatus, ProblemKind, RunOutcome};
+use test_anything::core::report::{CaseStatus, ProblemKind, RunOutcome, StepStatus};
 use test_anything::core::runner;
 use test_anything::core::secrets::Secrets;
 use test_anything::core::session::{Session, Sessions};
@@ -419,6 +419,8 @@ struct EndPath {
     status: CaseStatus,
     exit: ExitCode,
     problem: ProblemKind,
+    /// The step that must be reported as skipped after the failure.
+    skipped: Option<usize>,
 }
 
 #[test]
@@ -446,6 +448,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Error,
             exit: ExitCode::Environment,
             problem: ProblemKind::Environment,
+            skipped: None,
         },
         EndPath {
             name: "an assertion fails",
@@ -460,6 +463,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Failed,
             exit: ExitCode::TestFailure,
             problem: ProblemKind::Assertion,
+            skipped: Some(2),
         },
         EndPath {
             name: "a step fails",
@@ -474,6 +478,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Error,
             exit: ExitCode::Environment,
             problem: ProblemKind::Environment,
+            skipped: Some(2),
         },
         EndPath {
             name: "a step times out",
@@ -488,6 +493,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Error,
             exit: ExitCode::Timeout,
             problem: ProblemKind::Timeout,
+            skipped: Some(2),
         },
         EndPath {
             name: "an observer fails to start",
@@ -495,6 +501,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Error,
             exit: ExitCode::Environment,
             problem: ProblemKind::Environment,
+            skipped: None,
         },
         EndPath {
             name: "an observer fails to collect",
@@ -502,6 +509,7 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             status: CaseStatus::Error,
             exit: ExitCode::Environment,
             problem: ProblemKind::Environment,
+            skipped: Some(1),
         },
     ];
 
@@ -537,6 +545,15 @@ fn every_end_path_closes_the_session_exactly_once_and_reports_a_close_failure() 
             .as_ref()
             .unwrap_or_else(|| panic!("{}: the case must carry its problem", path.name));
         assert_eq!(problem.kind, path.problem, "{}", path.name);
+        if let Some(index) = path.skipped {
+            assert_eq!(
+                case.steps[index].status,
+                StepStatus::Skipped,
+                "{}: step {} must be skipped after the failure",
+                path.name,
+                index + 1
+            );
+        }
         assert_eq!(
             case.close_errors.len(),
             1,
