@@ -1,4 +1,4 @@
-﻿//! Tests for `ta schema` and its agreement with the case parser.
+//! Tests for `ta schema` and its agreement with the case parser.
 //!
 //! `jsonschema` is a dev-dependency only: production code builds the schema
 //! with `serde_json` and never validates anything at run time.
