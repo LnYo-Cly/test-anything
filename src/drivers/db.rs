@@ -42,9 +42,9 @@ pub fn register(registry: &mut Registry) -> Result<(), String> {
 struct DbQueryArgs {
     /// Connection string: `sqlite:<path>` for a SQLite file, `postgres://` or
     /// `postgresql://` for a PostgreSQL server.
-    // The schema states the same rule as `check`, so an editor catches a
-    // mistyped scheme before the case runs.
-    #[schemars(extend("pattern" = "^(sqlite:|postgres://|postgresql://)"))]
+    // The scheme is not a `pattern` in the schema: the documented way to pass a
+    // URL is `${env:DATABASE_URL}`, which no pattern could accept. `check`
+    // enforces the rule on the expanded value instead.
     url: String,
     /// One read-only SQL statement. `?` and `?1` bind SQLite parameters, `$1`
     /// binds PostgreSQL parameters.
@@ -334,7 +334,6 @@ mod tests {
             .expect("the argument schema must serialize");
 
         for (field, value) in [
-            ("url", json!({"url": "mysql://x/y", "sql": "SELECT 1"})),
             ("sql", json!({"url": "sqlite:a.db", "sql": ""})),
             (
                 "max_rows",
@@ -352,6 +351,22 @@ mod tests {
             let error = validate(&value).expect_err("validate must refuse the same arguments");
             assert!(error.contains(field), "got: {error}");
         }
+    }
+
+    #[test]
+    fn the_argument_schema_accepts_an_environment_reference() {
+        // The documented way to pass a connection string is `${env:...}`, and
+        // the value of the variable is what carries a scheme. A schema that
+        // demanded a scheme here would reject every case the guide recommends.
+        let schema = serde_json::to_value(schema_for!(DbQueryArgs))
+            .expect("the argument schema must serialize");
+        let arguments = json!({"url": "${env:DATABASE_URL}", "sql": "SELECT 1"});
+
+        assert!(
+            jsonschema::is_valid(&schema, &arguments),
+            "the schema must accept {arguments}"
+        );
+        parse(&arguments).expect("the arguments must parse");
     }
 
     #[test]

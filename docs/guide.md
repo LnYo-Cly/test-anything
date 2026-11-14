@@ -21,6 +21,7 @@ The complete reference for `ta`: installation options, building from source, the
   - [Assertions](#assertions)
   - [`http.request`](#httprequest)
   - [`cli.run`](#clirun)
+  - [`db.query`](#dbquery)
   - [`log.file`](#logfile)
 - [Failure bundles](#failure-bundles)
 - [Output](#output)
@@ -729,6 +730,120 @@ and the step is a timeout (exit 5). Both pipes are read on their own threads, so
 a program that writes more than a pipe buffer cannot deadlock the run; after the
 program ends `ta` waits at most one second for the pipes to close, so a process
 the program left behind cannot hang it.
+
+### `db.query`
+
+Reads the database to check what an earlier step wrote. The step runs exactly
+one read-only statement against SQLite or PostgreSQL and returns what the
+database answered.
+
+| Argument | Meaning |
+| --- | --- |
+| `url` | Connection string. Required. `sqlite:<path>` names a SQLite file, `postgres://` and `postgresql://` are a PostgreSQL URL. |
+| `sql` | One SQL statement. Required. |
+| `params` | Values bound to the placeholders, in order. Each one is a string, a number, a boolean or null. |
+| `max_rows` | Largest number of rows to return. Defaults to `1000`; the step reads one row more to know whether the result was longer. |
+| `timeout_ms` | Timeout for connecting and for the whole query. Defaults to `30000`. |
+
+```yaml
+name: The order was written
+steps:
+  - http.request:
+      method: POST
+      url: ${base}/orders
+      json: { id: 42, total: 19.9 }
+    save:
+      order_id: $.body.id
+  - db.query:
+      url: ${env:DATABASE_URL}
+      sql: SELECT status, total FROM orders WHERE id = $1
+      params: ["${order_id}"]
+    expect:
+      - path: $.rows[0].status
+        equals: paid
+      - path: $.row_count
+        equals: 1
+```
+
+The result is an object with `columns`, `rows`, `row_count` and `truncated`:
+
+| Field | Meaning |
+| --- | --- |
+| `columns` | Column names, in the order the database returned them. |
+| `rows` | One object per row, keyed by column name. |
+| `row_count` | Number of entries in `rows`. |
+| `truncated` | `true` when the statement matched more rows than `max_rows`, in which case only `max_rows` are returned. |
+
+A SQLite `url` is a path: a relative one is resolved against the working
+directory of `ta`, not against the case file. `sqlite:` also accepts an absolute
+path, for example `sqlite:C:/data/app.db` or `sqlite:/var/lib/app.db`. Any other
+prefix is an invalid argument (exit 3).
+
+#### Parameters
+
+SQLite takes `?` for an anonymous placeholder and `?1`, `?2` for numbered ones;
+PostgreSQL takes `$1`, `$2`. A boolean bound to SQLite becomes `1` or `0`,
+because SQLite has no boolean type of its own. A parameter list that does not
+match the placeholders is refused by the database.
+
+#### Types
+
+| Database type | JSON |
+| --- | --- |
+| integer | number |
+| real, double precision | number |
+| text, varchar, char, enum | string |
+| boolean (PostgreSQL) | `true` / `false` |
+| `NULL` | `null` |
+| blob, bytea | lower-case hexadecimal string, for example `"00ff"` |
+| `numeric`, `decimal`, `uuid`, `date`, `time`, `timestamp`, `timestamptz`, `interval`, arrays, ranges, and any other PostgreSQL type | string, exactly as PostgreSQL prints it under `::text` |
+| `json`, `jsonb` | the JSON value itself |
+
+A PostgreSQL column whose type is not in the first rows of that table is
+requested as `::text` in a wrapper query, so it still arrives as a string
+instead of failing the step. The column names, the order and the `params` are
+unchanged by that wrapper.
+
+#### Read-only
+
+`db.query` cannot write, and the guarantee does not rest on looking at the SQL:
+
+- SQLite opens the file read-only, so the connection has no write permission,
+  and it also sets `PRAGMA query_only`. A database file that does not exist is
+  an environment error (exit 4) — the step never creates one.
+- PostgreSQL sets `SESSION CHARACTERISTICS AS TRANSACTION READ ONLY` and runs
+  the statement in an explicit `READ ONLY` transaction that is always rolled
+  back. A statement that tries to write is refused by the server.
+- Only one statement is accepted. SQLite refuses a second statement after it
+  prepares the first one, and PostgreSQL prepares through the extended protocol,
+  which cannot carry two commands.
+
+`INSERT`, `UPDATE`, `DELETE`, `CREATE`, `DROP`, a write hidden in a common table
+expression such as `WITH gone AS (DELETE FROM orders RETURNING *) SELECT * FROM
+gone`, and a statement list such as `SELECT 1; DELETE FROM orders` all fail the
+step with an environment error (exit 4) whose message says the step is read-only.
+The database is left exactly as it was.
+
+#### Connection strings and secrets
+
+Never write a password into a case file. Read the whole connection string from
+the environment instead:
+
+```yaml
+- db.query:
+    url: ${env:DATABASE_URL}
+    sql: SELECT 1
+```
+
+A value that comes from `${env:NAME}` is a secret: it is replaced with `***` in
+the terminal, in `--output json` and in every file of a failure bundle, so a
+connection string that appears in an error message cannot leak the password. See
+[Secrets](#secrets).
+
+A refused connection and a statement the server rejects are both environment
+errors (exit 4); exceeding `timeout_ms` is a timeout (exit 5). The message names
+the SQLite file it could not open, but never repeats a PostgreSQL URL, which
+usually carries a password.
 
 ### `log.file`
 
