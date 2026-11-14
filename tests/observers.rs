@@ -421,6 +421,42 @@ steps:
 
 #[cfg(feature = "cli")]
 #[test]
+fn a_null_observe_block_is_a_case_error_with_a_position() {
+    let dir = TempDir::new("observe-null");
+    // A bare `observe:` is a null value; the schema refuses it, so the parser
+    // must refuse it too instead of reading it as "no observations".
+    let case = dir.write(
+        "case.yaml",
+        "name: Null observer\nobserve:\nsteps:\n  - cli.run:\n      command: ta\n      args: [\"--version\"]\n",
+    );
+
+    let run = run_ta_in(dir.path(), &["run", path_str(&case)]);
+    assert_eq!(
+        exit_code(&run),
+        Some(3),
+        "stdout: {:?}\nstderr: {:?}",
+        stdout(&run),
+        stderr(&run)
+    );
+    let message = stderr(&run);
+    assert!(message.contains("`observe`"), "got: {message}");
+    assert!(message.contains("found null"), "got: {message}");
+    assert!(
+        message.contains("line 2"),
+        "a null observe block must name its position, got: {message}"
+    );
+
+    let lint = run_ta_in(dir.path(), &["lint", path_str(&case)]);
+    assert_eq!(exit_code(&lint), Some(3), "stdout: {:?}", stdout(&lint));
+    assert!(
+        stdout(&lint).contains("found null"),
+        "lint must report the same problem, got: {}",
+        stdout(&lint)
+    );
+}
+
+#[cfg(feature = "cli")]
+#[test]
 fn a_duplicate_observation_name_is_a_case_error_with_a_position() {
     let dir = TempDir::new("observe-duplicate");
     // A repeated name is a duplicate key of one YAML mapping, so the parser

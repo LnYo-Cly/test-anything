@@ -147,12 +147,12 @@ struct RawCase {
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
-    observe: Option<Spanned<RawObservations>>,
+    observe: RawObservations,
     steps: Vec<Spanned<RawStep>>,
 }
 
 /// The `observe:` mapping as written, keeping the location of every entry.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct RawObservations {
     entries: Vec<(String, Spanned<RawObservation>)>,
 }
@@ -629,13 +629,9 @@ fn build_case(raw: Spanned<RawCase>) -> Result<Case, Problem> {
 /// observer per name and a mapping of arguments. Whether the observer exists
 /// and whether the arguments satisfy it needs the registry, so the runner
 /// checks that and points at the locations kept here.
-fn parse_observations(raw: Option<Spanned<RawObservations>>) -> Result<Vec<Observation>, Problem> {
-    let Some(node) = raw else {
-        return Ok(Vec::new());
-    };
-
-    let mut observations = Vec::with_capacity(node.value.entries.len());
-    for (name, value) in node.value.entries {
+fn parse_observations(raw: RawObservations) -> Result<Vec<Observation>, Problem> {
+    let mut observations = Vec::with_capacity(raw.entries.len());
+    for (name, value) in raw.entries {
         let location = value.referenced;
         validate_observation_name(&name).map_err(|message| Problem {
             location,
@@ -1503,6 +1499,17 @@ steps:
             assert!(error.contains(fragment), "`{name}`: got: {error}");
             assert!(error.contains("lowercase letters"), "got: {error}");
         }
+    }
+
+    #[test]
+    fn a_null_observe_block_is_refused_with_its_location() {
+        let error =
+            parse("name: Broken\nobserve:\nsteps:\n  - sample.call:\n      target: local\n")
+                .expect_err("a null observe block must be refused");
+
+        assert!(error.contains("`observe`"), "got: {error}");
+        assert!(error.contains("found null"), "got: {error}");
+        assert!(error.starts_with("line "), "got: {error}");
     }
 
     #[test]
