@@ -123,7 +123,11 @@ fn only_the_lines_a_step_added_are_observed() {
         ),
     );
 
-    let output = run_ta_in(dir.path(), &["run", path_str(&case), "--no-bundle"]);
+    let var = format!("ta={}", ta());
+    let output = run_ta_in(
+        dir.path(),
+        &["run", path_str(&case), "--no-bundle", "--var", &var],
+    );
     assert_eq!(
         exit_code(&output),
         Some(0),
@@ -156,7 +160,11 @@ fn a_log_file_that_does_not_exist_yields_an_empty_observation() {
         ),
     );
 
-    let output = run_ta_in(dir.path(), &["run", path_str(&case), "--no-bundle"]);
+    let var = format!("ta={}", ta());
+    let output = run_ta_in(
+        dir.path(),
+        &["run", path_str(&case), "--no-bundle", "--var", &var],
+    );
     assert_eq!(
         exit_code(&output),
         Some(0),
@@ -194,7 +202,11 @@ fn a_truncated_log_is_read_from_the_start_and_marked() {
         ),
     );
 
-    let output = run_ta_in(dir.path(), &["run", path_str(&case), "--no-bundle"]);
+    let var = format!("ta={}", ta());
+    let output = run_ta_in(
+        dir.path(),
+        &["run", path_str(&case), "--no-bundle", "--var", &var],
+    );
     assert_eq!(
         exit_code(&output),
         Some(0),
@@ -620,12 +632,16 @@ name: No observers
 observe: {}
 steps:
   - cli.run:
-      command: ta
+      command: ${ta}
       args: ["--version"]
 "#,
     );
 
-    let output = run_ta_in(dir.path(), &["run", path_str(&case), "--no-bundle"]);
+    let var = format!("ta={}", ta());
+    let output = run_ta_in(
+        dir.path(),
+        &["run", path_str(&case), "--no-bundle", "--var", &var],
+    );
     assert_eq!(
         exit_code(&output),
         Some(0),
