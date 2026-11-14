@@ -91,6 +91,11 @@ fn run_case(dir: &TempDir, case: &str) -> Output {
 /// Every entry must be refused: a plain write in either case, a write hidden
 /// behind a leading comment, a write inside a common table expression, and a
 /// second statement behind a read.
+///
+/// SQLite has no data-modifying common table expression, so the `WITH ... DELETE`
+/// entry is a syntax error there rather than a write an engine stopped.
+/// PostgreSQL does have them, and in the PostgreSQL run of this test the
+/// read-only transaction is what refuses it.
 const WRITE_STATEMENTS: &[&str] = &[
     "INSERT INTO items (id, name) VALUES (99, 'mallory')",
     "insert into items (id, name) values (98, 'mallory')",

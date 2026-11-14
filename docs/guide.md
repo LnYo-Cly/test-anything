@@ -822,7 +822,10 @@ unchanged by that wrapper.
 expression such as `WITH gone AS (DELETE FROM orders RETURNING *) SELECT * FROM
 gone`, and a statement list such as `SELECT 1; DELETE FROM orders` all fail the
 step with an environment error (exit 4) whose message says the step is read-only.
-The database is left exactly as it was.
+The database is left exactly as it was. SQLite does not accept a data-modifying
+common table expression at all, so there the statement is a syntax error before
+either read-only layer sees it; PostgreSQL accepts the syntax, and the read-only
+transaction is what refuses it.
 
 #### Connection strings and secrets
 
