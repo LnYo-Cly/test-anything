@@ -53,7 +53,7 @@ pub(super) fn query(
     let prepared = transaction.prepare(sql).map_err(|error| {
         // The extended protocol refuses a statement list here, before anything
         // runs; every other parse error lands here too.
-        refused_statement(&error)
+        refused_statement(&detail(&error))
     })?;
     let prepared = cast_unsupported_columns(&mut transaction, sql, prepared)?;
 
@@ -102,7 +102,8 @@ pub(super) fn query(
 fn connect(url: &str, timeout: Duration) -> Result<Client, StepError> {
     let mut config: postgres::Config = url.parse().map_err(|error| {
         StepError::InvalidArguments(format!(
-            "invalid arguments: `url` is not a PostgreSQL connection string: {error}"
+            "invalid arguments: `url` is not a PostgreSQL connection string: {}",
+            detail(&error)
         ))
     })?;
     config.connect_timeout(timeout);
@@ -125,12 +126,44 @@ fn connect_error(error: &postgres::Error) -> StepError {
     {
         return StepError::Timeout(format!(
             "the connection to the PostgreSQL server timed out; increase `timeout_ms` or check `url`: {}",
-            error
+            detail(error)
         ));
     }
     StepError::Environment(format!(
-        "could not connect to the PostgreSQL database: {error}; check `url`, that the server is running and that the network reaches it"
+        "could not connect to the PostgreSQL database: {}; check `url`, that the server is running and that the network reaches it",
+        detail(error)
     ))
+}
+
+/// The server's own words for a failure.
+///
+/// [`postgres::Error`] prints the literal string `db error` and keeps the
+/// reason in its source, so a bare `{error}` would make a syntax error, a
+/// missing table and a read-only refusal look the same. A server error carries
+/// severity, SQLSTATE and message; anything else, a network failure for example,
+/// is spelled out through its source chain.
+fn detail(error: &postgres::Error) -> String {
+    if let Some(failure) = error.as_db_error() {
+        // The severities are localized; the SQLSTATE and the message are the
+        // part a user can act on.
+        return format!(
+            "{} (SQLSTATE {}): {}",
+            failure.severity(),
+            failure.code().code(),
+            failure.message()
+        );
+    }
+    let mut text = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(current) = source {
+        let message = current.to_string();
+        if !text.contains(&message) {
+            text.push_str(": ");
+            text.push_str(&message);
+        }
+        source = current.source();
+    }
+    text
 }
 
 /// The innermost [`std::io::Error`] of an error chain, if it holds one.
@@ -183,30 +216,94 @@ fn bind_all(
     let types = statement.params();
     let mut bound: Vec<Box<dyn ToSql + Sync>> = Vec::with_capacity(params.len());
     for (index, param) in params.iter().enumerate() {
-        bound.push(bind(param, types.get(index)));
+        bound.push(bind(index, param, types.get(index))?);
     }
     Ok(bound)
 }
 
-fn bind(param: &Param, ty: Option<&Type>) -> Box<dyn ToSql + Sync> {
-    match param {
+/// Chooses the Rust type the placeholder asks for.
+///
+/// `postgres-types` implements `ToSql` for `i64` on `INT8` only and for `f64`
+/// on `FLOAT8` only, so a value serialized as `i64` is refused by an `integer`
+/// placeholder before the server sees it. The placeholder's own type, which the
+/// prepared statement reports, decides the width here.
+fn bind(
+    index: usize,
+    param: &Param,
+    ty: Option<&Type>,
+) -> Result<Box<dyn ToSql + Sync>, StepError> {
+    let ty = ty.unwrap_or(&Type::TEXT);
+    Ok(match param {
         Param::Null(()) => Box::new(Null),
         Param::Bool(flag) => Box::new(*flag),
-        // A whole number sent to a floating-point placeholder has to become a
-        // float, or the server refuses the parameter's type.
-        Param::Integer(number) => match ty {
-            Some(ty) if matches!(*ty, Type::FLOAT4 | Type::FLOAT8) => Box::new(*number as f64),
+        Param::Integer(number) => match *ty {
+            Type::INT2 => Box::new(fitting::<i16>(index, *number, ty)?),
+            Type::INT4 => Box::new(fitting::<i32>(index, *number, ty)?),
+            Type::OID => Box::new(fitting::<u32>(index, *number, ty)?),
+            Type::FLOAT4 => Box::new(*number as f32),
+            Type::FLOAT8 => Box::new(*number as f64),
             _ => Box::new(*number),
         },
-        Param::Float(number) => Box::new(*number),
+        Param::Float(number) => match *ty {
+            Type::FLOAT4 => Box::new(*number as f32),
+            Type::FLOAT8 => Box::new(*number),
+            Type::INT2 => Box::new(whole::<i16>(index, *number, ty)?),
+            Type::INT4 => Box::new(whole::<i32>(index, *number, ty)?),
+            Type::OID => Box::new(whole::<u32>(index, *number, ty)?),
+            _ => Box::new(*number),
+        },
         Param::Text(text) => Box::new(text.clone()),
+    })
+}
+
+/// Narrows a whole number to the placeholder's width, or explains why it cannot.
+fn fitting<T>(index: usize, value: i64, ty: &Type) -> Result<T, StepError>
+where
+    T: TryFrom<i64>,
+{
+    T::try_from(value).map_err(|_| does_not_fit(index, &value.to_string(), ty))
+}
+
+/// Narrows a fractional number that happens to hold a whole value.
+fn whole<T>(index: usize, value: f64, ty: &Type) -> Result<T, StepError>
+where
+    T: TryFrom<i64>,
+{
+    if value.fract() != 0.0 || value < i64::MIN as f64 || value > i64::MAX as f64 {
+        return Err(does_not_fit(index, &value.to_string(), ty));
     }
+    fitting::<T>(index, value as i64, ty)
+}
+
+fn does_not_fit(index: usize, value: &str, ty: &Type) -> StepError {
+    StepError::InvalidArguments(format!(
+        "invalid arguments: `params[{index}]` is {value}, which does not fit the `{}` ({ty}) placeholder; change the value or cast the placeholder, for example `$1::bigint`",
+        sql_name(ty)
+    ))
+}
+
+/// The SQL name of a type, which is what a user writes in a cast.
+fn sql_name(ty: &Type) -> String {
+    let name = match *ty {
+        Type::INT2 => "smallint",
+        Type::INT4 => "integer",
+        Type::INT8 => "bigint",
+        Type::OID => "oid",
+        Type::FLOAT4 => "real",
+        Type::FLOAT8 => "double precision",
+        Type::BOOL => "boolean",
+        Type::TEXT => "text",
+        Type::VARCHAR => "varchar",
+        Type::NUMERIC => "numeric",
+        _ => return ty.name().to_string(),
+    };
+    name.to_string()
 }
 
 /// Whether a column can be decoded without help from the server.
 ///
-/// Everything else — `numeric`, `uuid`, the date and time types, enums, arrays,
-/// ranges and the rest — is asked for as text instead. `postgres` has no Rust
+/// Everything else 閳?`numeric`, `uuid`, the date and time types, enums, arrays,
+/// ranges and the rest 閳?is asked for as text instead. `postgres` has no Rust
 /// type for them without an extra feature and a matching Rust type, and a
 /// mapping table that only covers what this crate happens to implement would
 /// fail on the column a case actually needs.
@@ -264,7 +361,7 @@ fn cast_unsupported_columns(
     );
     transaction
         .prepare(&wrapped)
-        .map_err(|error| refused_statement(&error))
+        .map_err(|error| refused_statement(&detail(&error)))
 }
 
 fn projection(sql: &str, columns: &[String], unsupported: &[usize]) -> String {
@@ -280,8 +377,11 @@ fn projection(sql: &str, columns: &[String], unsupported: &[usize]) -> String {
             }
         })
         .collect();
+    // The statement goes on a line of its own: an end-of-line comment at its
+    // end would otherwise swallow the closing parenthesis, and the query would
+    // fail on the wrapper instead of running.
     format!(
-        "SELECT {} FROM ({}) AS ta_db_query",
+        "SELECT {} FROM (\n{}\n) AS ta_db_query",
         names.join(", "),
         without_terminator(sql)
     )
@@ -292,28 +392,133 @@ fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-/// Removes the `;` that may end the statement and the space around it.
+/// Removes the terminator and the comments that follow it.
 ///
-/// A terminator is valid at the top level but not inside the subquery the
-/// wrapping adds.
+/// A `;` is valid at the top level but not inside the subquery the wrapping
+/// adds, and it is not always the last character: `SELECT 1; -- note` ends with
+/// a comment. The terminator is found by scanning, so a `;` inside a string
+/// literal, a quoted identifier, a dollar-quoted body or a comment is left
+/// alone.
 fn without_terminator(sql: &str) -> &str {
-    let sql = sql.trim();
-    match sql.strip_suffix(';') {
-        Some(rest) => rest.trim_end(),
-        None => sql,
+    match terminator(sql) {
+        Some(end) => sql[..end].trim(),
+        None => sql.trim(),
     }
+}
+
+/// The byte index of the `;` that ends the statement, if there is one.
+fn terminator(sql: &str) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => index = after_quoted(bytes, index, b'\''),
+            b'"' => index = after_quoted(bytes, index, b'"'),
+            b'-' if bytes.get(index + 1) == Some(&b'-') => index = after_line_comment(bytes, index),
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index = after_block_comment(bytes, index)
+            }
+            b'$' => index = after_dollar_quoted(bytes, index),
+            b';' => return Some(index),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// Skips a quoted run, where a doubled quote is an escaped one.
+fn after_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == quote {
+            if bytes.get(index + 1) == Some(&quote) {
+                index += 2;
+                continue;
+            }
+            return index + 1;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+fn after_line_comment(bytes: &[u8], start: usize) -> usize {
+    match bytes[start..].iter().position(|byte| *byte == b'\n') {
+        Some(offset) => start + offset + 1,
+        None => bytes.len(),
+    }
+}
+
+/// Skips a block comment; the server nests them, so this does too.
+fn after_block_comment(bytes: &[u8], start: usize) -> usize {
+    let mut depth = 0_usize;
+    let mut index = start;
+    while index < bytes.len() {
+        if bytes.get(index) == Some(&b'/') && bytes.get(index + 1) == Some(&b'*') {
+            depth += 1;
+            index += 2;
+            continue;
+        }
+        if bytes.get(index) == Some(&b'*') && bytes.get(index + 1) == Some(&b'/') {
+            depth -= 1;
+            index += 2;
+            if depth == 0 {
+                return index;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+/// Skips a `$tag$ 閳?$tag$` body, or one byte when this is not a dollar quote.
+fn after_dollar_quoted(bytes: &[u8], start: usize) -> usize {
+    let mut tag_end = start + 1;
+    while tag_end < bytes.len()
+        && (bytes[tag_end].is_ascii_alphanumeric() || bytes[tag_end] == b'_')
+    {
+        tag_end += 1;
+    }
+    if bytes.get(tag_end) != Some(&b'$') {
+        return start + 1;
+    }
+    let tag = &bytes[start..=tag_end];
+    let mut index = tag_end + 1;
+    while index + tag.len() <= bytes.len() {
+        if &bytes[index..index + tag.len()] == tag {
+            return index + tag.len();
+        }
+        index += 1;
+    }
+    bytes.len()
 }
 
 /// Maps one cell to the JSON the step returns.
 fn cell(row: &Row, index: usize, ty: &Type, name: &str) -> Result<Value, StepError> {
+    // `postgres-types` decodes `i64` from `INT8` only and `f64` from `FLOAT8`
+    // only; each narrower width needs its own Rust type or the decode fails
+    // before any value is read.
     let decoded = match *ty {
         Type::BOOL => row
             .try_get::<_, Option<bool>>(index)
             .map(|value| value.map_or(Value::Null, Value::Bool)),
-        Type::INT2 | Type::INT4 | Type::INT8 | Type::OID => row
+        Type::INT2 => row
+            .try_get::<_, Option<i16>>(index)
+            .map(|value| value.map_or(Value::Null, |number| json!(number))),
+        Type::INT4 => row
+            .try_get::<_, Option<i32>>(index)
+            .map(|value| value.map_or(Value::Null, |number| json!(number))),
+        Type::INT8 => row
             .try_get::<_, Option<i64>>(index)
             .map(|value| value.map_or(Value::Null, |number| json!(number))),
-        Type::FLOAT4 | Type::FLOAT8 => row
+        Type::OID => row
+            .try_get::<_, Option<u32>>(index)
+            .map(|value| value.map_or(Value::Null, |number| json!(number))),
+        Type::FLOAT4 => row
+            .try_get::<_, Option<f32>>(index)
+            .map(|value| value.map_or(Value::Null, |number| json!(number))),
+        Type::FLOAT8 => row
             .try_get::<_, Option<f64>>(index)
             .map(|value| value.map_or(Value::Null, |number| json!(number))),
         Type::JSON | Type::JSONB => row
@@ -330,7 +535,8 @@ fn cell(row: &Row, index: usize, ty: &Type, name: &str) -> Result<Value, StepErr
 
     decoded.map_err(|error| {
         StepError::Environment(format!(
-            "could not decode column `{name}` of type `{ty}`: {error}"
+            "could not decode column `{name}` of type `{ty}`: {}",
+            detail(&error)
         ))
     })
 }
@@ -339,14 +545,16 @@ fn cell(row: &Row, index: usize, ty: &Type, name: &str) -> Result<Value, StepErr
 fn execute_error(error: &postgres::Error) -> StepError {
     match error.code() {
         Some(code) if *code == SqlState::QUERY_CANCELED => StepError::Timeout(format!(
-            "the query did not finish within the timeout and was cancelled by the server; increase `timeout_ms`: {error}"
+            "the query did not finish within the timeout and was cancelled by the server; increase `timeout_ms`: {}",
+            detail(error)
         )),
         Some(code) if *code == SqlState::READ_ONLY_SQL_TRANSACTION => {
             StepError::Environment(format!(
-                "`db.query` runs one read-only statement and the database refused this one because it writes: {error}"
+                "`db.query` runs one read-only statement and the database refused this one because it writes: {}",
+                detail(error)
             ))
         }
-        _ => refused_statement(error),
+        _ => refused_statement(&detail(error)),
     }
 }
 
@@ -361,7 +569,8 @@ fn plan_error(error: &postgres::Error) -> StepError {
         ));
     }
     StepError::Environment(format!(
-        "could not start the read-only query: {error}; check that `url` names a reachable server"
+        "could not start the read-only query: {}; check that `url` names a reachable server",
+        detail(error)
     ))
 }
 
@@ -419,13 +628,61 @@ mod tests {
     #[test]
     fn a_projection_casts_only_the_columns_that_need_it() {
         // The column list is what `prepare` reports, and the wrapper keeps the
-        // names so a case can still assert on `rows[0].total`.
+        // names so a case can still assert on `rows[0].total`. The statement
+        // sits on its own line so an end-of-line comment cannot comment out the
+        // closing parenthesis.
         let sql = "SELECT total, name FROM orders;";
         let wrapped = projection(sql, &["total".to_string(), "name".to_string()], &[0]);
 
         assert_eq!(
             wrapped,
-            "SELECT \"total\"::text AS \"total\", \"name\" FROM (SELECT total, name FROM orders) AS ta_db_query"
+            "SELECT \"total\"::text AS \"total\", \"name\" FROM (\nSELECT total, name FROM orders\n) AS ta_db_query"
+        );
+    }
+
+    #[test]
+    fn a_terminator_followed_by_a_comment_is_removed_with_the_comment() {
+        // A `;` is legal at the top level and illegal inside the subquery, and
+        // it is not always the last character.
+        assert_eq!(without_terminator("SELECT 1; -- note"), "SELECT 1");
+        assert_eq!(without_terminator("SELECT 1 -- note"), "SELECT 1 -- note");
+        assert_eq!(without_terminator("SELECT 1;"), "SELECT 1");
+        assert_eq!(without_terminator("SELECT 1;  \n"), "SELECT 1");
+        assert_eq!(without_terminator("  SELECT 1  "), "SELECT 1");
+        assert_eq!(
+            without_terminator("SELECT 1 /* done */"),
+            "SELECT 1 /* done */"
+        );
+    }
+
+    #[test]
+    fn a_semicolon_inside_a_literal_is_not_a_terminator() {
+        for sql in [
+            "SELECT 'a;b'",
+            "SELECT \"odd;name\" FROM t",
+            "SELECT 1 -- a; b",
+            "SELECT 1 /* a; b */",
+            "SELECT $$a;b$$",
+            "SELECT $tag$a;b$tag$",
+        ] {
+            assert_eq!(
+                without_terminator(sql),
+                sql,
+                "`{sql}` holds no statement terminator"
+            );
+        }
+        assert_eq!(
+            without_terminator("SELECT 'a;b'; -- done"),
+            "SELECT 'a;b'",
+            "the terminator after the literal is still found"
+        );
+    }
+
+    #[test]
+    fn a_block_comment_is_skipped_even_when_it_nests() {
+        assert_eq!(
+            without_terminator("SELECT 1 /* outer /* inner; */ still */;"),
+            "SELECT 1 /* outer /* inner; */ still */"
         );
     }
 }

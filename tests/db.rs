@@ -424,8 +424,8 @@ fn a_connection_string_from_the_environment_is_redacted_everywhere() {
     std::fs::create_dir_all(&secret_dir).expect("the secret directory must be created");
     sqlite_fixture(&secret_dir.join("app.db"));
 
-    // The second step fails on purpose — it names a database file that is not
-    // there — so the path reaches a message, a failure bundle is written and
+    // The second step fails on purpose 鈥?it names a database file that is not
+    // there 鈥?so the path reaches a message, a failure bundle is written and
     // every channel can be searched. The URL is single-quoted: a Windows path
     // holds backslashes, which YAML would read as escapes inside double quotes.
     let case = r#"
@@ -565,6 +565,189 @@ fn postgres_rows(url: &str, table: &str) -> Vec<(i32, String)> {
 }
 
 #[test]
+fn postgres_every_integer_and_float_width_keeps_its_value() {
+    let Some(url) = postgres_or_skip("postgres_every_integer_and_float_width_keeps_its_value")
+    else {
+        return;
+    };
+    let dir = TempDir::new("db-pg-widths");
+    // Every width the server can return, in one row. `postgres` decodes `i64`
+    // from `INT8` only and `f64` from `FLOAT8` only, so each width needs its own
+    // Rust type; a single wrong choice aborts the whole step.
+    let case = format!(
+        r#"
+name: Reads every numeric width
+steps:
+  - db.query:
+      url: '{url}'
+      sql: >-
+        SELECT 1::smallint AS small, 2::integer AS medium, 3::bigint AS large,
+               4::oid AS oid, 1.5::real AS single, 2.25::double precision AS double
+    expect:
+      - path: $.columns
+        equals: [small, medium, large, oid, single, double]
+      - path: $.rows[0].small
+        equals: 1
+      - path: $.rows[0].medium
+        equals: 2
+      - path: $.rows[0].large
+        equals: 3
+      - path: $.rows[0].oid
+        equals: 4
+      - path: $.rows[0].single
+        equals: 1.5
+      - path: $.rows[0].double
+        equals: 2.25
+"#
+    );
+
+    let output = run_case(&dir, &case);
+
+    assert_eq!(
+        exit_code(&output),
+        Some(0),
+        "every width must decode; stdout: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn postgres_an_integer_parameter_fits_every_integer_width() {
+    let Some(url) = postgres_or_skip("postgres_an_integer_parameter_fits_every_integer_width")
+    else {
+        return;
+    };
+    let table = postgres_table(&url);
+    let dir = TempDir::new("db-pg-int-params");
+    // `id` is `integer`, the width a table's key usually has, and `$1` takes its
+    // type from the placeholder, not from whatever Rust type the step happens to
+    // send.
+    let case = format!(
+        r#"
+name: Binds an integer parameter to an integer placeholder
+steps:
+  - db.query:
+      url: '{url}'
+      sql: SELECT name FROM {table} WHERE id = $1
+      params: [2]
+    expect:
+      - path: $.rows
+        equals:
+          - {{ name: bob }}
+  - db.query:
+      url: '{url}'
+      sql: SELECT $1::smallint AS small, $2::bigint AS large, $3::real AS single
+      params: [7, 8, 9]
+    expect:
+      - path: $.rows[0]
+        equals: {{ small: 7, large: 8, single: 9.0 }}
+"#
+    );
+
+    let output = run_case(&dir, &case);
+
+    assert_eq!(exit_code(&output), Some(0), "stdout: {}", stdout(&output));
+}
+
+#[test]
+fn postgres_an_integer_parameter_that_does_not_fit_is_an_argument_error() {
+    let Some(url) =
+        postgres_or_skip("postgres_an_integer_parameter_that_does_not_fit_is_an_argument_error")
+    else {
+        return;
+    };
+    let dir = TempDir::new("db-pg-int-range");
+    let case = format!(
+        r#"
+name: An integer parameter outside smallint
+steps:
+  - db.query:
+      url: '{url}'
+      sql: SELECT $1::smallint AS small
+      params: [70000]
+"#
+    );
+
+    let output = run_case(&dir, &case);
+
+    // An argument the placeholder cannot hold is the case's mistake, not the
+    // environment's, and the message has to name the parameter.
+    assert_eq!(exit_code(&output), Some(3), "stdout: {}", stdout(&output));
+    let said = messages(&output);
+    assert!(said.contains("params[0]"), "got: {said}");
+    assert!(said.contains("smallint"), "got: {said}");
+}
+
+#[test]
+fn postgres_a_trailing_comment_does_not_break_the_text_wrapper() {
+    let Some(url) = postgres_or_skip("postgres_a_trailing_comment_does_not_break_the_text_wrapper")
+    else {
+        return;
+    };
+    let dir = TempDir::new("db-pg-comment");
+    // `numeric` is not decoded natively, so the step wraps the statement in a
+    // subquery that casts it to text. The closing parenthesis must not end up
+    // inside the comment.
+    let case = format!(
+        r#"
+name: Reads numeric with a trailing comment
+steps:
+  - db.query:
+      url: '{url}'
+      sql: 'SELECT 1.25::numeric AS total -- trailing note'
+    expect:
+      - path: $.rows[0].total
+        equals: "1.25"
+  - db.query:
+      url: '{url}'
+      sql: 'SELECT 2.5::numeric AS total; -- trailing note'
+    expect:
+      - path: $.rows[0].total
+        equals: "2.5"
+"#
+    );
+
+    let output = run_case(&dir, &case);
+
+    assert_eq!(exit_code(&output), Some(0), "stdout: {}", stdout(&output));
+}
+
+#[test]
+fn postgres_a_server_error_keeps_the_server_message() {
+    let Some(url) = postgres_or_skip("postgres_a_server_error_keeps_the_server_message") else {
+        return;
+    };
+    let dir = TempDir::new("db-pg-error");
+    let case = format!(
+        r#"
+name: Reads a table that is not there
+steps:
+  - db.query:
+      url: '{url}'
+      sql: SELECT * FROM ta_no_such_table_for_a_test
+"#
+    );
+
+    let output = run_case(&dir, &case);
+
+    assert_eq!(exit_code(&output), Some(4), "stdout: {}", stdout(&output));
+    let said = messages(&output);
+    // `postgres::Error` prints the literal string `db error` and keeps the
+    // server's text in `source()`, so a bare `{error}` loses every detail.
+    // The severity and the message are localized by the server, so the test
+    // checks the SQLSTATE and the table name, which are not.
+    assert!(said.contains("42P01"), "the SQLSTATE must be shown: {said}");
+    assert!(
+        said.contains("ta_no_such_table_for_a_test"),
+        "the server's own message must be shown: {said}"
+    );
+    assert!(
+        !said.contains("refused this one: db error"),
+        "the message must not be the bare `db error`: {said}"
+    );
+}
+
+#[test]
 fn postgres_one_query_returns_columns_rows_and_types() {
     let Some(url) = postgres_or_skip("postgres_one_query_returns_columns_rows_and_types") else {
         return;
@@ -681,6 +864,13 @@ fn postgres_refuses_every_write_and_leaves_the_data_unchanged() {
             Some(4),
             "`{sql}` must be refused, stderr: {}",
             stderr(&output)
+        );
+        // Exit 4 alone is not proof: a decode or bind error exits 4 as well, so
+        // the gate would pass on a client that never reached the server.
+        let said = messages(&output);
+        assert!(
+            said.contains("read-only"),
+            "the message must say the step is read-only for `{sql}`: {said}"
         );
         assert_eq!(
             postgres_rows(&url, table),
