@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use crate::core::observer::{Observer, ObserverDefinition, ObserverError};
 use crate::core::paths;
 use crate::core::registry::Registry;
+use crate::core::session::Sessions;
 
 /// Name of the observer this module registers.
 pub const OBSERVER_NAME: &str = "log.file";
@@ -82,7 +83,7 @@ struct LogFile {
 }
 
 impl Observer for LogFile {
-    fn start(&mut self) -> Result<(), ObserverError> {
+    fn start(&mut self, _sessions: &mut Sessions) -> Result<(), ObserverError> {
         // A file that does not exist yet is a file with no content: the program
         // under test may create it during this step.
         self.position = match std::fs::metadata(&self.path) {
@@ -94,7 +95,7 @@ impl Observer for LogFile {
         Ok(())
     }
 
-    fn collect(&mut self) -> Result<Value, ObserverError> {
+    fn collect(&mut self, _sessions: &mut Sessions) -> Result<Value, ObserverError> {
         // The metadata is read before the file is opened. A directory can be
         // opened and read on some platforms and refused on others, and a read
         // of it may return no bytes at all, so the platform decides nothing
@@ -207,10 +208,14 @@ mod tests {
         let log = dir.join("app.log");
         std::fs::write(&log, "old line\n").expect("the log must be written");
         let mut observer = observer(&log);
-        observer.start().expect("start must succeed");
+        observer
+            .start(&mut Sessions::new())
+            .expect("start must succeed");
         std::fs::write(&log, "old line\nnew line\n").expect("the log must grow");
 
-        let value = observer.collect().expect("collect must succeed");
+        let value = observer
+            .collect(&mut Sessions::new())
+            .expect("collect must succeed");
 
         assert_eq!(value["lines"], json!(["new line"]));
         assert_eq!(value["text"], "new line\n");
@@ -226,8 +231,12 @@ mod tests {
         let log = dir.join("app.log");
         let mut observer = observer(&log);
 
-        observer.start().expect("start must succeed");
-        let value = observer.collect().expect("collect must succeed");
+        observer
+            .start(&mut Sessions::new())
+            .expect("start must succeed");
+        let value = observer
+            .collect(&mut Sessions::new())
+            .expect("collect must succeed");
 
         assert_eq!(value["lines"], json!([]));
         assert_eq!(value["text"], "");
@@ -242,10 +251,14 @@ mod tests {
         let log = dir.join("app.log");
         std::fs::write(&log, "much longer original content\n").expect("the log must be written");
         let mut observer = observer(&log);
-        observer.start().expect("start must succeed");
+        observer
+            .start(&mut Sessions::new())
+            .expect("start must succeed");
         std::fs::write(&log, "restarted\n").expect("the log must be replaced");
 
-        let value = observer.collect().expect("collect must succeed");
+        let value = observer
+            .collect(&mut Sessions::new())
+            .expect("collect must succeed");
 
         assert_eq!(value["lines"], json!(["restarted"]));
         assert_eq!(value["truncated"], json!(true));
@@ -258,11 +271,15 @@ mod tests {
         let dir = fixture("limited");
         let log = dir.join("app.log");
         let mut observer = observer(&log);
-        observer.start().expect("start must succeed");
+        observer
+            .start(&mut Sessions::new())
+            .expect("start must succeed");
         let total = usize::try_from(MAX_BYTES).expect("the limit fits a usize") + 10;
         std::fs::write(&log, "y".repeat(total)).expect("the log must be written");
 
-        let first = observer.collect().expect("collect must succeed");
+        let first = observer
+            .collect(&mut Sessions::new())
+            .expect("collect must succeed");
         assert_eq!(first["limited"], json!(true));
         assert_eq!(
             first["text"].as_str().map(str::len),
@@ -271,8 +288,12 @@ mod tests {
 
         // The next step starts from the length the file has by then, so the
         // cut-off remainder is not reported as part of it.
-        observer.start().expect("start must succeed");
-        let second = observer.collect().expect("collect must succeed");
+        observer
+            .start(&mut Sessions::new())
+            .expect("start must succeed");
+        let second = observer
+            .collect(&mut Sessions::new())
+            .expect("collect must succeed");
         assert_eq!(second["limited"], json!(false));
         assert_eq!(second["text"], "");
 
@@ -284,7 +305,9 @@ mod tests {
         let dir = fixture("directory");
         let mut observer = observer(&dir);
 
-        let error = observer.start().expect_err("a directory is not a log file");
+        let error = observer
+            .start(&mut Sessions::new())
+            .expect_err("a directory is not a log file");
 
         let ObserverError::Environment(message) = error else {
             panic!("expected an environment error, got: {error:?}");
@@ -306,11 +329,13 @@ mod tests {
         let dir = fixture("late-directory");
         let log = dir.join("app.log");
         let mut observer = observer(&log);
-        observer.start().expect("a missing file is empty");
+        observer
+            .start(&mut Sessions::new())
+            .expect("a missing file is empty");
         std::fs::create_dir(&log).expect("the directory must be created");
 
         let error = observer
-            .collect()
+            .collect(&mut Sessions::new())
             .expect_err("a directory cannot be read as a log file");
 
         let ObserverError::Environment(message) = error else {

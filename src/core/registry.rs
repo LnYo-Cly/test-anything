@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::core::observer::ObserverDefinition;
+use crate::core::session::Sessions;
 
 /// Why a step could not produce a result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +40,11 @@ pub struct StepDefinition {
     /// returning a message the user can act on.
     pub validate: fn(&Value) -> Result<(), String>,
     /// Runs the step and returns its JSON result.
-    pub run: fn(&Value) -> Result<Value, StepError>,
+    ///
+    /// The [`Sessions`] value belongs to the running case. A step that needs a
+    /// long-lived resource asks it for the resource on first use and receives
+    /// the same one on every later step of that case.
+    pub run: fn(&Value, &mut Sessions) -> Result<Value, StepError>,
 }
 
 /// The steps and observers available to the runner, keyed by name.
@@ -162,7 +167,7 @@ mod tests {
             description: "Test step.",
             args_schema: serde_json::json!({"type": "object"}),
             validate: |_| Ok(()),
-            run: |_| Ok(Value::Null),
+            run: |_, _| Ok(Value::Null),
         }
     }
 
@@ -170,11 +175,17 @@ mod tests {
     struct Silent;
 
     impl Observer for Silent {
-        fn start(&mut self) -> Result<(), crate::core::observer::ObserverError> {
+        fn start(
+            &mut self,
+            _sessions: &mut Sessions,
+        ) -> Result<(), crate::core::observer::ObserverError> {
             Ok(())
         }
 
-        fn collect(&mut self) -> Result<Value, crate::core::observer::ObserverError> {
+        fn collect(
+            &mut self,
+            _sessions: &mut Sessions,
+        ) -> Result<Value, crate::core::observer::ObserverError> {
             Ok(Value::Null)
         }
     }
