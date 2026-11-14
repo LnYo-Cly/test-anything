@@ -1,21 +1,21 @@
 #!/bin/sh
-# Installs the latest `ta` release on Linux or macOS.
+# Installs the latest `da` release on Linux or macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.sh | sh
-#   curl -fsSL https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/LnYo-Cly/do-anything/main/install.sh | sh
+#   curl -fsSL https://cdn.jsdelivr.net/gh/LnYo-Cly/do-anything@main/install.sh | sh
 #
 # Environment:
-#   TA_VERSION       release tag to install, for example v0.2.0 (default: latest)
-#   TA_INSTALL_DIR   directory that receives `ta` (default: ~/.local/bin)
-#   TA_DOWNLOAD_URL  base URL that holds the release files, for a mirror or proxy
-#                    (default: https://github.com/LnYo-Cly/test-anything/releases/download)
+#   DA_VERSION       release tag to install, for example v0.2.0 (default: latest)
+#   DA_INSTALL_DIR   directory that receives `da` (default: ~/.local/bin)
+#   DA_DOWNLOAD_URL  base URL that holds the release files, for a mirror or proxy
+#                    (default: https://github.com/LnYo-Cly/do-anything/releases/download)
 set -eu
 
-REPO="LnYo-Cly/test-anything"
-INSTALL_DIR="${TA_INSTALL_DIR:-$HOME/.local/bin}"
+REPO="LnYo-Cly/do-anything"
+INSTALL_DIR="${DA_INSTALL_DIR:-$HOME/.local/bin}"
 
 fail() {
-  printf 'ta install: %s\n' "$1" >&2
+  printf 'da install: %s\n' "$1" >&2
   exit 1
 }
 
@@ -46,27 +46,27 @@ if [ "$os" = "apple-darwin" ] && [ "$arch" = "x86_64" ] &&
 fi
 target="${arch}-${os}"
 
-version="${TA_VERSION:-}"
+version="${DA_VERSION:-}"
 if [ -z "$version" ]; then
   # The /releases/latest page redirects to /releases/tag/<tag>; this avoids the
   # rate-limited GitHub API.
   latest="$(final_url "https://github.com/${REPO}/releases/latest")" ||
-    fail "could not reach github.com to find the latest release; set TA_VERSION and TA_DOWNLOAD_URL to use a mirror"
+    fail "could not reach github.com to find the latest release; set DA_VERSION and DA_DOWNLOAD_URL to use a mirror"
   version="${latest##*/}"
   case "$version" in
     v*) ;;
-    *) fail "could not read the latest release tag from ${latest}; set TA_VERSION, for example TA_VERSION=v0.2.0" ;;
+    *) fail "could not read the latest release tag from ${latest}; set DA_VERSION, for example DA_VERSION=v0.2.0" ;;
   esac
 fi
 
-base="${TA_DOWNLOAD_URL:-https://github.com/${REPO}/releases/download}"
+base="${DA_DOWNLOAD_URL:-https://github.com/${REPO}/releases/download}"
 base="${base%/}/${version}"
-archive="ta-${version}-${target}.tar.gz"
+archive="da-${version}-${target}.tar.gz"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-printf 'Downloading ta %s for %s\n' "$version" "$target"
+printf 'Downloading da %s for %s\n' "$version" "$target"
 fetch "${base}/${archive}" "${tmp}/${archive}" ||
   fail "could not download ${base}/${archive}; check that ${version} exists and has a build for ${target}"
 fetch "${base}/SHA256SUMS" "${tmp}/SHA256SUMS" ||
@@ -86,12 +86,12 @@ fi
 
 tar -xzf "${tmp}/${archive}" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
-# Copy then rename, so a running `ta` is never replaced by a half-written file.
-cp "${tmp}/ta-${version}-${target}/ta" "${INSTALL_DIR}/.ta.new"
-chmod 755 "${INSTALL_DIR}/.ta.new"
-mv -f "${INSTALL_DIR}/.ta.new" "${INSTALL_DIR}/ta"
+# Copy then rename, so a running `da` is never replaced by a half-written file.
+cp "${tmp}/da-${version}-${target}/da" "${INSTALL_DIR}/.da.new"
+chmod 755 "${INSTALL_DIR}/.da.new"
+mv -f "${INSTALL_DIR}/.da.new" "${INSTALL_DIR}/da"
 
-printf 'Installed %s to %s\n' "$("${INSTALL_DIR}/ta" --version)" "${INSTALL_DIR}/ta"
+printf 'Installed %s to %s\n' "$("${INSTALL_DIR}/da" --version)" "${INSTALL_DIR}/da"
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*) ;;
   *) printf '%s is not on PATH. Add this line to your shell profile:\n  export PATH="%s:%s"\n' "$INSTALL_DIR" "$INSTALL_DIR" "\$PATH" ;;

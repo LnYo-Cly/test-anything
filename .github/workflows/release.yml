@@ -54,7 +54,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       TARGET: ${{ matrix.target }}
-      BIN: target/${{ matrix.target }}/release/ta${{ matrix.exe }}
+      BIN: target/${{ matrix.target }}/release/da${{ matrix.exe }}
     defaults:
       run:
         shell: bash
@@ -71,8 +71,8 @@ jobs:
         run: |
           set -u
           actual=$("$BIN" --version)
-          if [ "$actual" != "ta ${VERSION}" ]; then
-            echo "::error::Expected 'ta ${VERSION}', got '${actual}'"
+          if [ "$actual" != "da ${VERSION}" ]; then
+            echo "::error::Expected 'da ${VERSION}', got '${actual}'"
             exit 1
           fi
 
@@ -92,7 +92,7 @@ jobs:
           echo "Smoke test passed on ${TARGET}"
       - name: Package
         run: |
-          name="ta-v${VERSION}-${TARGET}"
+          name="da-v${VERSION}-${TARGET}"
           mkdir -p "dist/${name}"
           cp "$BIN" LICENSE README.md "dist/${name}/"
           cd dist
@@ -105,7 +105,7 @@ jobs:
           ls -l
       - uses: actions/upload-artifact@v7
         with:
-          name: ta-${{ matrix.target }}
+          name: da-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 

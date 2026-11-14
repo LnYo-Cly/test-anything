@@ -1,25 +1,25 @@
-# Installs the latest `ta` release on Windows.
+# Installs the latest `da` release on Windows.
 #
-#   irm https://raw.githubusercontent.com/LnYo-Cly/test-anything/main/install.ps1 | iex
-#   irm https://cdn.jsdelivr.net/gh/LnYo-Cly/test-anything@main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/LnYo-Cly/do-anything/main/install.ps1 | iex
+#   irm https://cdn.jsdelivr.net/gh/LnYo-Cly/do-anything@main/install.ps1 | iex
 #
 # Environment:
-#   TA_VERSION         release tag to install, for example v0.2.0 (default: latest)
-#   TA_INSTALL_DIR     directory that receives ta.exe (default: %LOCALAPPDATA%\Programs\ta)
-#   TA_DOWNLOAD_URL    base URL that holds the release files, for a mirror or proxy
-#                      (default: https://github.com/LnYo-Cly/test-anything/releases/download)
-#   TA_NO_MODIFY_PATH  set to any value to leave the user PATH unchanged
+#   DA_VERSION         release tag to install, for example v0.2.0 (default: latest)
+#   DA_INSTALL_DIR     directory that receives da.exe (default: %LOCALAPPDATA%\Programs\da)
+#   DA_DOWNLOAD_URL    base URL that holds the release files, for a mirror or proxy
+#                      (default: https://github.com/LnYo-Cly/do-anything/releases/download)
+#   DA_NO_MODIFY_PATH  set to any value to leave the user PATH unchanged
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 # Windows PowerShell 5.1 does not enable TLS 1.2 by default.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$Repo = 'LnYo-Cly/test-anything'
+$Repo = 'LnYo-Cly/do-anything'
 
 function Fail([string]$Message) {
     # `exit` would close the window when run through `irm | iex`; throw stops the script only.
-    throw "ta install: $Message"
+    throw "da install: $Message"
 }
 
 function Get-WithRetry([string]$Uri, [string]$OutFile) {
@@ -43,14 +43,14 @@ try {
 }
 $Targets = switch ($Arch) {
     { $_ -in 'X64', 'AMD64' } { @('x86_64-pc-windows-msvc') }
-    # Releases before v0.3.0 have no native Arm build; the x86_64 one runs through emulation.
+    # Prefer the native Arm build; the x86_64 one runs through emulation.
     { $_ -in 'Arm64', 'ARM64' } { @('aarch64-pc-windows-msvc', 'x86_64-pc-windows-msvc') }
-    default { Fail "unsupported CPU $Arch; ta is built for 64-bit x86 and Arm" }
+    default { Fail "unsupported CPU $Arch; da is built for 64-bit x86 and Arm" }
 }
 
-$InstallDir = if ($env:TA_INSTALL_DIR) { $env:TA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\ta' }
+$InstallDir = if ($env:DA_INSTALL_DIR) { $env:DA_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\da' }
 
-$Version = $env:TA_VERSION
+$Version = $env:DA_VERSION
 if (-not $Version) {
     # The /releases/latest page redirects to /releases/tag/<tag>; this avoids the rate-limited GitHub API.
     try {
@@ -61,18 +61,18 @@ if (-not $Version) {
         $latest = $response.ResponseUri.AbsoluteUri
         $response.Close()
     } catch {
-        Fail "could not reach github.com to find the latest release; set TA_VERSION and TA_DOWNLOAD_URL to use a mirror"
+        Fail "could not reach github.com to find the latest release; set DA_VERSION and DA_DOWNLOAD_URL to use a mirror"
     }
     $Version = $latest.Split('/')[-1]
     if (-not $Version.StartsWith('v')) {
-        Fail "could not read the latest release tag from $latest; set TA_VERSION, for example `$env:TA_VERSION = 'v0.2.0'"
+        Fail "could not read the latest release tag from $latest; set DA_VERSION, for example `$env:DA_VERSION = 'v0.2.0'"
     }
 }
 
-$Base = if ($env:TA_DOWNLOAD_URL) { $env:TA_DOWNLOAD_URL.TrimEnd('/') } else { "https://github.com/$Repo/releases/download" }
+$Base = if ($env:DA_DOWNLOAD_URL) { $env:DA_DOWNLOAD_URL.TrimEnd('/') } else { "https://github.com/$Repo/releases/download" }
 $Base = "$Base/$Version"
 
-$Temp = Join-Path ([IO.Path]::GetTempPath()) ("ta-install-" + [Guid]::NewGuid().ToString('N'))
+$Temp = Join-Path ([IO.Path]::GetTempPath()) ("da-install-" + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Temp | Out-Null
 try {
     try { Get-WithRetry "$Base/SHA256SUMS" (Join-Path $Temp 'SHA256SUMS') }
@@ -84,11 +84,11 @@ try {
     }
 
     # The first target this release was built for.
-    $Target = $Targets | Where-Object { $sums.ContainsKey("ta-$Version-$_.zip") } | Select-Object -First 1
+    $Target = $Targets | Where-Object { $sums.ContainsKey("da-$Version-$_.zip") } | Select-Object -First 1
     if (-not $Target) { Fail "$Version has no Windows build for $Arch" }
-    $Archive = "ta-$Version-$Target.zip"
+    $Archive = "da-$Version-$Target.zip"
 
-    Write-Host "Downloading ta $Version for $Target"
+    Write-Host "Downloading da $Version for $Target"
     try { Get-WithRetry "$Base/$Archive" (Join-Path $Temp $Archive) }
     catch { Fail "could not download $Base/$Archive" }
 
@@ -100,9 +100,9 @@ try {
 
     Expand-Archive -Path (Join-Path $Temp $Archive) -DestinationPath $Temp -Force
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $exe = Join-Path $InstallDir 'ta.exe'
-    # Copy then rename, so an existing ta.exe is never replaced by a half-written file.
-    Copy-Item (Join-Path $Temp "ta-$Version-$Target\ta.exe") "$exe.new" -Force
+    $exe = Join-Path $InstallDir 'da.exe'
+    # Copy then rename, so an existing da.exe is never replaced by a half-written file.
+    Copy-Item (Join-Path $Temp "da-$Version-$Target\da.exe") "$exe.new" -Force
     Move-Item "$exe.new" $exe -Force
 } finally {
     Remove-Item -Recurse -Force $Temp -ErrorAction SilentlyContinue
@@ -112,11 +112,11 @@ Write-Host "Installed $(& $exe --version) to $exe"
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $entries = if ($userPath) { $userPath.Split(';') } else { @() }
-if ($env:TA_NO_MODIFY_PATH) {
-    Write-Host "TA_NO_MODIFY_PATH is set; add $InstallDir to PATH yourself."
+if ($env:DA_NO_MODIFY_PATH) {
+    Write-Host "DA_NO_MODIFY_PATH is set; add $InstallDir to PATH yourself."
 } elseif ($entries -notcontains $InstallDir) {
     $newPath = if ($userPath) { "$userPath;$InstallDir" } else { $InstallDir }
     [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
     $env:Path = "$env:Path;$InstallDir"
-    Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use ta."
+    Write-Host "Added $InstallDir to your user PATH. Open a new terminal to use da."
 }

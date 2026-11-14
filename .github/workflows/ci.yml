@@ -61,18 +61,18 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_USER: ta
-          POSTGRES_PASSWORD: ta-ci-only
-          POSTGRES_DB: ta
+          POSTGRES_USER: da
+          POSTGRES_PASSWORD: da-ci-only
+          POSTGRES_DB: da
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U ta -d ta"
+          --health-cmd "pg_isready -U da -d da"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
     env:
-      TA_TEST_POSTGRES_URL: "postgres://ta:ta-ci-only@localhost:5432/ta?sslmode=disable"
+      DA_TEST_POSTGRES_URL: "postgres://da:da-ci-only@localhost:5432/da?sslmode=disable"
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -107,37 +107,37 @@ jobs:
         shell: sh
         run: |
           set -eu
-          TA_INSTALL_DIR="$RUNNER_TEMP/latest" sh install.sh
-          "$RUNNER_TEMP/latest/ta" --version | grep '^ta [0-9]'
-          TA_VERSION=v0.1.0 TA_INSTALL_DIR="$RUNNER_TEMP/pinned" sh install.sh
-          test "$("$RUNNER_TEMP/pinned/ta" --version)" = "ta 0.1.0"
-          if TA_VERSION=v9.9.9 TA_INSTALL_DIR="$RUNNER_TEMP/missing" sh install.sh; then
+          DA_INSTALL_DIR="$RUNNER_TEMP/latest" sh install.sh
+          "$RUNNER_TEMP/latest/da" --version | grep '^da [0-9]'
+          DA_VERSION=v0.1.0 DA_INSTALL_DIR="$RUNNER_TEMP/pinned" sh install.sh
+          test "$("$RUNNER_TEMP/pinned/da" --version)" = "da 0.1.0"
+          if DA_VERSION=v9.9.9 DA_INSTALL_DIR="$RUNNER_TEMP/missing" sh install.sh; then
             echo "installing a missing version must fail"; exit 1
           fi
-          test ! -e "$RUNNER_TEMP/missing/ta"
+          test ! -e "$RUNNER_TEMP/missing/da"
       - name: Install with install.ps1 (PowerShell 7)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $env:TA_NO_MODIFY_PATH = '1'
-          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\latest"
+          $env:DA_NO_MODIFY_PATH = '1'
+          $env:DA_INSTALL_DIR = "$env:RUNNER_TEMP\latest"
           Get-Content install.ps1 -Raw | Invoke-Expression
-          & "$env:RUNNER_TEMP\latest\ta.exe" --version
-          $env:TA_VERSION = 'v0.1.0'
-          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\pinned"
+          & "$env:RUNNER_TEMP\latest\da.exe" --version
+          $env:DA_VERSION = 'v0.1.0'
+          $env:DA_INSTALL_DIR = "$env:RUNNER_TEMP\pinned"
           Get-Content install.ps1 -Raw | Invoke-Expression
-          if ((& "$env:RUNNER_TEMP\pinned\ta.exe" --version) -ne 'ta 0.1.0') { throw 'expected ta 0.1.0' }
-          $env:TA_VERSION = 'v9.9.9'
-          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\missing"
+          if ((& "$env:RUNNER_TEMP\pinned\da.exe" --version) -ne 'da 0.1.0') { throw 'expected da 0.1.0' }
+          $env:DA_VERSION = 'v9.9.9'
+          $env:DA_INSTALL_DIR = "$env:RUNNER_TEMP\missing"
           $failed = $false
           try { Get-Content install.ps1 -Raw | Invoke-Expression } catch { $failed = $true }
           if (-not $failed) { throw 'installing a missing version must fail' }
-          if (Test-Path "$env:RUNNER_TEMP\missing\ta.exe") { throw 'a failed install left ta.exe behind' }
+          if (Test-Path "$env:RUNNER_TEMP\missing\da.exe") { throw 'a failed install left da.exe behind' }
       - name: Install with install.ps1 (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          $env:TA_NO_MODIFY_PATH = '1'
-          $env:TA_INSTALL_DIR = "$env:RUNNER_TEMP\ps51"
+          $env:DA_NO_MODIFY_PATH = '1'
+          $env:DA_INSTALL_DIR = "$env:RUNNER_TEMP\ps51"
           Get-Content install.ps1 -Raw | Invoke-Expression
-          & "$env:RUNNER_TEMP\ps51\ta.exe" --version
+          & "$env:RUNNER_TEMP\ps51\da.exe" --version
