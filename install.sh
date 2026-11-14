@@ -5,7 +5,7 @@
 #   curl -fsSL https://cdn.jsdelivr.net/gh/LnYo-Cly/do-anything@main/install.sh | sh
 #
 # Environment:
-#   DA_VERSION       release tag to install, for example v0.2.0 (default: latest)
+#   DA_VERSION       release tag to install, for example v0.1.0 (default: latest)
 #   DA_INSTALL_DIR   directory that receives `da` (default: ~/.local/bin)
 #   DA_DOWNLOAD_URL  base URL that holds the release files, for a mirror or proxy
 #                    (default: https://github.com/LnYo-Cly/do-anything/releases/download)
@@ -55,7 +55,7 @@ if [ -z "$version" ]; then
   version="${latest##*/}"
   case "$version" in
     v*) ;;
-    *) fail "could not read the latest release tag from ${latest}; set DA_VERSION, for example DA_VERSION=v0.2.0" ;;
+    *) fail "could not read the latest release tag from ${latest}; set DA_VERSION, for example DA_VERSION=v0.1.0" ;;
   esac
 fi
 

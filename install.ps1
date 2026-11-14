@@ -4,7 +4,7 @@
 #   irm https://cdn.jsdelivr.net/gh/LnYo-Cly/do-anything@main/install.ps1 | iex
 #
 # Environment:
-#   DA_VERSION         release tag to install, for example v0.2.0 (default: latest)
+#   DA_VERSION         release tag to install, for example v0.1.0 (default: latest)
 #   DA_INSTALL_DIR     directory that receives da.exe (default: %LOCALAPPDATA%\Programs\da)
 #   DA_DOWNLOAD_URL    base URL that holds the release files, for a mirror or proxy
 #                      (default: https://github.com/LnYo-Cly/do-anything/releases/download)
@@ -65,7 +65,7 @@ if (-not $Version) {
     }
     $Version = $latest.Split('/')[-1]
     if (-not $Version.StartsWith('v')) {
-        Fail "could not read the latest release tag from $latest; set DA_VERSION, for example `$env:DA_VERSION = 'v0.2.0'"
+        Fail "could not read the latest release tag from $latest; set DA_VERSION, for example `$env:DA_VERSION = 'v0.1.0'"
     }
 }
 

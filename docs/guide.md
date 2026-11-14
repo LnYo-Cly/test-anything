@@ -59,7 +59,7 @@ Options, set as environment variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `DA_VERSION` | Release to install, for example `v0.2.0`. Default: the latest. |
+| `DA_VERSION` | Release to install, for example `v0.1.0`. Default: the latest. |
 | `DA_INSTALL_DIR` | Directory that receives `da`. |
 | `DA_DOWNLOAD_URL` | Base URL of a mirror or proxy that serves the release files as `<base>/<tag>/<file>`. The archive and `SHA256SUMS` both come from it, so use one you trust. Finding the latest release still contacts `github.com` unless `DA_VERSION` is set. |
 | `DA_NO_MODIFY_PATH` | Windows only: leave the user `PATH` unchanged. |
