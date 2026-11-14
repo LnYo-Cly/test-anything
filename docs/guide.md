@@ -13,6 +13,7 @@ The complete reference for `ta`: installation options, building from source, the
   - [The service under test](#the-service-under-test)
   - [Observers](#observers)
     - [Observers and parallel runs](#observers-and-parallel-runs)
+  - [Sessions](#sessions)
   - [Classification and filtering](#classification-and-filtering)
   - [Linting](#linting)
   - [Secrets](#secrets)
@@ -360,6 +361,94 @@ are a case error (exit 3). Both name the observation and the observer kind. The
 contract lives in `src/core/observer.rs`; `src/drivers/log.rs` is a complete
 example, and `tests/architecture.rs` keeps the engine free of any concrete
 observer.
+
+### Sessions
+
+A step that talks to a browser, a device or a connection needs the same
+resource in several steps: the page opened by step one is the page step two
+clicks, and the network observer has to read that page. A **session** is that
+resource. It belongs to one case, is created the first time a step asks for it,
+and is closed when the case ends.
+
+The engine knows nothing about the resource. A plugin declares its own type,
+implements `Session`, and stores it under a kind it chooses:
+
+```rust
+use test_anything::core::session::{Session, Sessions};
+use test_anything::core::registry::StepError;
+
+struct Page {
+    // A connection, a child process, a device handle, ...
+}
+
+impl Session for Page {
+    fn close(&mut self) -> Result<(), String> {
+        // Release the page. Return a message if that fails.
+        Ok(())
+    }
+}
+
+fn open(_args: &serde_json::Value, sessions: &mut Sessions) -> Result<serde_json::Value, StepError> {
+    let page = sessions
+        .get_or_create("browser.page", || Page::launch())
+        .map_err(StepError::Execution)?;
+    // Use `page` for this step; later steps ask for the same kind.
+    Ok(serde_json::json!({ "opened": true }))
+}
+```
+
+`get_or_create` takes the concrete type as a generic parameter and the kind as
+a `&'static str`. The first call runs the factory; every later call of the same
+case returns the value already stored. A factory that returns an error leaves
+no slot behind, so a later step may try again. Asking for one kind with two
+different types is an error, not a panic: one kind holds one concrete type for
+the whole case.
+
+A kind follows the step name rule: lowercase letters, digits, `.`, `_` and
+`-`. It is the plugin's own namespace and does not appear in a case file, so
+two plugins can choose their own kinds without coordinating.
+
+An observer receives the same `Sessions` value in `start` and `collect`:
+
+```rust
+use test_anything::core::observer::{Observer, ObserverError};
+use test_anything::core::session::Sessions;
+use serde_json::Value;
+
+impl Observer for NetworkCapture {
+    fn start(&mut self, _sessions: &mut Sessions) -> Result<(), ObserverError> {
+        Ok(())
+    }
+
+    fn collect(&mut self, sessions: &mut Sessions) -> Result<Value, ObserverError> {
+        let page = sessions
+            .get::<Page>("browser.page")
+            .map_err(ObserverError::Environment)?
+            .ok_or_else(|| ObserverError::Environment("no page was opened".to_string()))?;
+        // Read the requests the page made during the step.
+        Ok(serde_json::json!({ "requests": [] }))
+    }
+}
+```
+
+`start` runs before the step, so on the first step the session may not exist
+yet; `collect` runs after it, so that is where a resource the step opened is
+available. `get` returns `Ok(None)` for a kind the case never opened and an
+error for a kind held by another type.
+
+| Rule | Meaning |
+| --- | --- |
+| One set per case | The runner creates a new `Sessions` for every case. Cases that run at the same time with `--jobs` cannot see each other's sessions, so a plugin must not keep the resource in a global static. |
+| Created on first use | The factory runs when a step or an observation first asks for the kind. A case that never asks creates nothing. |
+| Closed at the end | The runner closes every open session in reverse creation order, whatever the case did: passed, failed an assertion, errored, timed out, or stopped before the remaining steps. Each session is closed exactly once. |
+| Close failure | The message names the session kind. A case that would have passed becomes an environment error (exit 4). A case that already failed or errored keeps its own status and problem, and the close error is attached to the report. |
+| Where it appears | Text output adds a `close:` line under the case. JSON adds `close_errors` to the case object, and a failure bundle's `report.json` carries the same field. Close messages are redacted like every other string. |
+| Fallback | `Sessions` also closes what is still open when it is dropped, for a panic or an early return. The normal path does not rely on it, and a fallback close cannot be reported because the report is already gone. |
+
+The built-in `http.request`, `cli.run`, `db.query` and `log.file` use no
+session, so their behavior is unchanged: each step still opens and closes what
+it needs within the step. The contract exists for the drivers and observers
+that need a resource across steps.
 
 ### Classification and filtering
 
