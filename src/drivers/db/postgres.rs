@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use postgres::error::SqlState;
+use postgres::fallible_iterator::FallibleIterator;
 use postgres::types::private::BytesMut;
 use postgres::types::{IsNull, ToSql, Type};
 use postgres::{Client, Row, Statement, Transaction};
@@ -67,25 +68,27 @@ pub(super) fn query(
         .map(|column| column.type_().clone())
         .collect();
     let bound = bind_all(&prepared, params)?;
-    let references: Vec<&(dyn ToSql + Sync)> = bound.iter().map(|value| value.as_ref()).collect();
-
-    let rows = transaction
-        .query(&prepared, &references)
+    // Rows are streamed, so a large table stops at `max_rows + 1` instead of
+    // being loaded whole.
+    let mut rows = transaction
+        .query_raw(&prepared, bound.iter().map(|value| value.as_ref()))
         .map_err(|error| execute_error(&error))?;
 
     let mut decoded = Vec::new();
     let mut truncated = false;
-    for row in &rows {
+    while let Some(row) = rows.next().map_err(|error| execute_error(&error))? {
         if decoded.len() as u64 == max_rows {
             truncated = true;
             break;
         }
         let mut object = Map::with_capacity(columns.len());
         for (index, name) in columns.iter().enumerate() {
-            object.insert(name.clone(), cell(row, index, &types[index], name)?);
+            object.insert(name.clone(), cell(&row, index, &types[index], name)?);
         }
         decoded.push(object);
     }
+
+    drop(rows);
 
     // Nothing this step ran may survive it. A rollback that fails leaves the
     // connection unusable, and the client closes it when it is dropped, so the
