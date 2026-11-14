@@ -1,9 +1,9 @@
 //! The session contract: a resource one case keeps alive across its steps.
 //!
-//! A step that needs a browser page, a device or a connection asks [`Sessions`]
-//! for it on first use. Every later step and every observation of the same case
-//! receives the same value, and the runner closes it when the case ends, whether
-//! the case passed, failed, errored, timed out or stopped early.
+//! A step that needs a resource across steps asks [`Sessions`] for it on first
+//! use. Every later step and every observation of the same case receives the
+//! same value, and the runner closes it when the case ends, whether the case
+//! passed, failed, errored, timed out or stopped early.
 //!
 //! The engine never names a concrete resource: a plugin declares its own type,
 //! implements [`Session`] and chooses the kind it is stored under. The runner
@@ -50,8 +50,8 @@ pub trait Session: Send + AsAny {
 /// The sessions of one case, keyed by the kind the plugin chose.
 ///
 /// A kind follows the step name rule: lowercase letters, digits, `.`, `_` and
-/// `-`. It is a plugin's own namespace, so a browser page and a network capture
-/// can share one case without naming each other.
+/// `-`. It is a plugin's own namespace, so two unrelated resources can share
+/// one case without naming each other.
 #[derive(Default)]
 pub struct Sessions {
     /// In creation order; [`Self::close_all`] pops from the end.
